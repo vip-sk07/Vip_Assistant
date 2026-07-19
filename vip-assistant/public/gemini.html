@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIP Assistant — GenAI OS Monitor</title>
+  
+  <!-- Premium Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- Icon Pack -->
+  <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-dark: #07090e;
+      --panel-bg: rgba(15, 19, 26, 0.7);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --text-main: #f8fafc;
+      --text-muted: #64748b;
+      --primary-color: #00f2fe;
+      --secondary-color: #4facfe;
+      --primary-gradient: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+      --accent-red: #ef4444;
+      --accent-green: #10b981;
+      --font-outfit: 'Outfit', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --border-radius: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(79, 172, 254, 0.05) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(0, 242, 254, 0.05) 0px, transparent 50%);
+      color: var(--text-main);
+      font-family: var(--font-outfit);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Navbar */
+    .navbar {
+      height: 70px;
+      border-bottom: 1px solid var(--border-color);
+      backdrop-filter: blur(12px);
+      padding: 0 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo-area {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-icon {
+      font-size: 28px;
+      background: var(--primary-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .logo-text {
+      font-weight: 700;
+      font-size: 18px;
+      letter-spacing: 1px;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 20px;
+    }
+
+    .nav-btn {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 8px 16px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.3s ease;
+    }
+
+    .nav-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: var(--primary-color);
+      box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
+    }
+
+    /* Dashboard Layout */
+    .dashboard-container {
+      max-width: 1200px;
+      width: 100%;
+      margin: 40px auto;
+      padding: 0 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 30px;
+      flex-grow: 1;
+    }
+
+    .dashboard-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .dashboard-title h2 {
+      font-size: 28px;
+      font-weight: 700;
+      background: var(--primary-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .dashboard-title p {
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .connection-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+      color: var(--accent-green);
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .connection-badge.offline {
+      background: rgba(239, 68, 68, 0.08);
+      border-color: rgba(239, 68, 68, 0.2);
+      color: var(--accent-red);
+    }
+
+    .connection-badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: currentColor;
+    }
+
+    /* Telemetry Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 24px;
+    }
+
+    .glass-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius);
+      backdrop-filter: blur(16px);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-title i {
+      font-size: 20px;
+      color: var(--primary-color);
+    }
+
+    /* Gauge / Value */
+    .metrics-display {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 10px 0;
+    }
+
+    .metric-value {
+      font-size: 48px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      background: var(--primary-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: var(--primary-gradient);
+      width: 0%;
+      transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .journal-log-box {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 14px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: #cbd5e1;
+      height: 90px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+
+    /* GenAI Panel */
+    .genai-narrative-panel {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .narration-box {
+      background: rgba(0, 242, 254, 0.02);
+      border: 1px dashed rgba(0, 242, 254, 0.2);
+      border-radius: 12px;
+      padding: 24px;
+      line-height: 1.7;
+      font-size: 16px;
+      color: #e2e8f0;
+      position: relative;
+    }
+
+    .narration-box.loading::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      background: var(--primary-gradient);
+      width: 100%;
+      animation: sweep 2s linear infinite;
+    }
+
+    @keyframes sweep {
+      0% { transform: scaleX(0); transform-origin: left; }
+      50% { transform: scaleX(1); transform-origin: left; }
+      50.1% { transform-origin: right; }
+      100% { transform: scaleX(0); transform-origin: right; }
+    }
+
+    .narrate-btn {
+      align-self: flex-start;
+      background: var(--primary-gradient);
+      color: var(--text-dark);
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.3s ease;
+    }
+
+    .narrate-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(0, 242, 254, 0.4);
+    }
+
+    .narrate-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <nav class="navbar">
+    <div class="logo-area">
+      <i class="bx bxs-bot logo-icon"></i>
+      <span class="logo-text">VIP ASSISTANT</span>
+    </div>
+    
+    <div class="nav-links">
+      <a href="/" class="nav-btn">
+        <i class="bx bx-chat"></i> Chat Terminal
+      </a>
+    </div>
+  </nav>
+
+  <!-- Dashboard Container -->
+  <div class="dashboard-container">
+    
+    <div class="dashboard-header">
+      <div class="dashboard-title">
+        <h2>GenAI OS Monitor</h2>
+        <p>Real-time telemetry and Gemini-narrated system health.</p>
+      </div>
+      
+      <div id="conn-badge" class="connection-badge offline">
+        <span class="dot"></span>
+        <span id="conn-status-text">Disconnected</span>
+      </div>
+    </div>
+
+    <!-- Telemetry Cards Grid -->
+    <div class="metrics-grid">
+      
+      <!-- RAM Gauge -->
+      <div class="glass-card">
+        <div class="card-header">
+          <div class="card-title">
+            <i class="bx bx-cabinet"></i> RAM Utilization
+          </div>
+        </div>
+        <div class="metrics-display">
+          <div id="ram-val" class="metric-value">0%</div>
+        </div>
+        <div class="progress-bar-container">
+          <div id="ram-progress" class="progress-bar"></div>
+        </div>
+      </div>
+
+      <!-- CPU Temp Gauge -->
+      <div class="glass-card">
+        <div class="card-header">
+          <div class="card-title">
+            <i class="bx bx-thermometer"></i> CPU Core Temp
+          </div>
+        </div>
+        <div class="metrics-display">
+          <div id="temp-val" class="metric-value">0°C</div>
+        </div>
+        <div class="progress-bar-container">
+          <div id="temp-progress" class="progress-bar"></div>
+        </div>
+      </div>
+
+      <!-- Last Systemd Log error -->
+      <div class="glass-card">
+        <div class="card-header">
+          <div class="card-title">
+            <i class="bx bx-shield-quarter"></i> Last Systemd Critical Error
+          </div>
+        </div>
+        <div id="journal-error" class="journal-log-box">None logged in active boot.</div>
+      </div>
+
+      <!-- GenAI Narrative Box -->
+      <div class="glass-card genai-narrative-panel">
+        <div class="card-header">
+          <div class="card-title">
+            <i class="bx bx-brain"></i> Gemini Live Status Summary
+          </div>
+          <button id="narrate-btn" class="narrate-btn" disabled>
+            <i class="bx bx-sparkles"></i> Narrate Status
+          </button>
+        </div>
+        
+        <div id="narration-box" class="narration-box">
+          Connecting to system monitor daemon to stream diagnostics...
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    let ws;
+    let latestMetrics = null;
+    let isNarrating = false;
+
+    const elRamVal = document.getElementById('ram-val');
+    const elRamProgress = document.getElementById('ram-progress');
+    const elTempVal = document.getElementById('temp-val');
+    const elTempProgress = document.getElementById('temp-progress');
+    const elJournalError = document.getElementById('journal-error');
+    const elNarrationBox = document.getElementById('narration-box');
+    const elNarrateBtn = document.getElementById('narrate-btn');
+    const elConnBadge = document.getElementById('conn-badge');
+    const elConnStatusText = document.getElementById('conn-status-text');
+
+    function connect() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+      
+      ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        elConnBadge.className = 'connection-badge';
+        elConnStatusText.textContent = 'Connected';
+        elNarrationBox.textContent = 'Awaiting next system telemetry snapshot...';
+      };
+      
+      ws.onclose = () => {
+        elConnBadge.className = 'connection-badge offline';
+        elConnStatusText.textContent = 'Disconnected';
+        elNarrateBtn.disabled = true;
+        setTimeout(connect, 4000);
+      };
+      
+      ws.onmessage = (event) => {
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch(e) { return; }
+        
+        if (payload.type === 'telemetry_snapshot') {
+          updateTelemetry(payload.data);
+        } else if (payload.type === 'telemetry_narrative') {
+          handleNarrative(payload);
+        }
+      };
+    }
+
+    function updateTelemetry(metrics) {
+      latestMetrics = metrics;
+      
+      // Update RAM
+      const ram = metrics.ramPercent || 0;
+      elRamVal.textContent = `${ram}%`;
+      elRamProgress.style.width = `${ram}%`;
+      if (ram > 85) {
+        elRamProgress.style.background = 'linear-gradient(90deg, #f59e0b, #ef4444)';
+      } else {
+        elRamProgress.style.background = 'var(--primary-gradient)';
+      }
+      
+      // Update CPU Temp
+      const temp = metrics.cpuTemp;
+      if (typeof temp === 'number') {
+        elTempVal.textContent = `${temp}°C`;
+        // Normalize 40C-100C to 0%-100%
+        const normalized = Math.min(Math.max((temp - 40) / 60 * 100, 0), 100);
+        elTempProgress.style.width = `${normalized}%`;
+        if (temp > 85) {
+          elTempProgress.style.background = 'linear-gradient(90deg, #f59e0b, #ef4444)';
+        } else {
+          elTempProgress.style.background = 'var(--primary-gradient)';
+        }
+      } else {
+        elTempVal.textContent = 'N/A';
+        elTempProgress.style.width = '0%';
+      }
+      
+      // Update Journal error
+      elJournalError.textContent = metrics.journalError || 'None logged in active boot.';
+      
+      if (!isNarrating) {
+        elNarrateBtn.disabled = false;
+      }
+    }
+
+    function triggerNarration() {
+      if (!latestMetrics || isNarrating) return;
+      
+      isNarrating = true;
+      elNarrateBtn.disabled = true;
+      elNarrationBox.className = 'narration-box loading';
+      elNarrationBox.textContent = 'Gemini is evaluating host metrics...';
+      
+      // Retrieve settings from localStorage if available
+      let apiKey = '';
+      const savedSettings = localStorage.getItem('vip_assistant_settings');
+      if (savedSettings) {
+        try {
+          const parsed = JSON.parse(savedSettings);
+          apiKey = parsed.apiKey || '';
+        } catch (e) {}
+      }
+      
+      ws.send(JSON.stringify({
+        type: 'narrate_telemetry',
+        data: latestMetrics,
+        apiKey: apiKey
+      }));
+    }
+
+    function handleNarrative(payload) {
+      isNarrating = false;
+      elNarrateBtn.disabled = false;
+      elNarrationBox.className = 'narration-box';
+      
+      if (payload.error) {
+        elNarrationBox.innerHTML = `<span style="color: var(--accent-red); font-weight: 500;"><i class="bx bx-error"></i> ${payload.error}</span>`;
+      } else {
+        elNarrationBox.textContent = payload.text;
+      }
+    }
+
+    elNarrateBtn.addEventListener('click', triggerNarration);
+
+    connect();
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIP Assistant — Local Agent Platform</title>
+  <meta name="description" content="Premium web-based local development assistant and AI agent. Runs terminal commands, reads and writes files locally.">
+  
+  <!-- Premium Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- Icon Pack -->
+  <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
+  
+  <!-- Custom Styling -->
+  <link rel="stylesheet" href="styles.css">
+  
+  <!-- CodeMirror CSS & JS -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/material-palenight.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/javascript/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/css/css.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/xml/xml.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/markdown/markdown.min.js"></script>
+</head>
+<body>
+  <div id="app-container">
+    
+    <!-- Activity Bar: Vertical Icon Bar on the very left -->
+    <div id="activity-bar" class="activity-bar">
+      <div class="activity-bar-top">
+        <div class="activity-bar-logo" style="margin-bottom: 12px; color: var(--primary-color); font-size: 24px; padding: 4px 0; display: flex; align-items: center; justify-content: center; width: 100%;">
+          <i class="bx bxs-paper-plane animate-float"></i>
+        </div>
+        <button id="activity-explorer" class="activity-btn active" title="Explorer">
+          <i class="bx bx-folder"></i>
+        </button>
+        <button id="activity-undo" class="activity-btn" title="Undo Last AI Edit">
+          <i class="bx bx-undo"></i>
+        </button>
+      </div>
+      <div class="activity-bar-bottom">
+        <button id="activity-settings" class="activity-btn" title="Settings">
+          <i class="bx bx-cog"></i>
+        </button>
+      </div>
+    </div>
+    
+    <!-- Sidebar Explorer: Workspace Folder & Files tree -->
+    <aside id="sidebar-panel">
+      <div class="sidebar-header">
+        <div class="logo-area">
+          <i class="bx bxs-bot logo-icon"></i>
+          <span class="logo-text">EXPLORER</span>
+        </div>
+      </div>
+      
+      <div class="workspace-info">
+        <div class="workspace-info-header">
+          <div class="info-label">Active Folder</div>
+          <button id="sidebar-open-folder-btn" class="icon-action-btn" title="Open Folder">
+            <i class="bx bx-folder-open"></i>
+          </button>
+        </div>
+        <div id="workspace-path" title="Loading workspace...">Loading...</div>
+      </div>
+      
+      <div class="sidebar-menu-label">
+        <i class="bx bx-folder-open"></i> Workspace Files
+      </div>
+      
+      <div id="file-explorer-container" style="flex-grow: 1; overflow-y: auto;">
+        <ul id="file-tree" class="file-tree">
+          <li class="loading-item">Scanning directory...</li>
+        </ul>
+      </div>
+      
+      <div class="sidebar-footer" style="display: none;">
+        <button id="settings-trigger-btn" class="sidebar-btn" title="Settings">
+          <i class="bx bx-cog"></i> Settings
+        </button>
+        <button id="refresh-ws-btn" class="sidebar-btn" title="Refresh Directory">
+          <i class="bx bx-refresh"></i> Refresh
+        </button>
+      </div>
+    </aside>
+
+    <!-- Workspace Layout: Center (Editor) & Right (Agent) -->
+    <div id="workspace-layout">
+      
+      <!-- Split Code Editor Panel (Center) -->
+      <section id="editor-panel">
+        <div class="editor-header">
+          <div id="editor-tabs-container" class="editor-tabs-container">
+            <!-- Dynamic tabs go here -->
+          </div>
+          <div class="editor-header-actions">
+            <button id="editor-save-btn" class="save-btn" style="display: none;" title="Save Changes (Ctrl+S)">
+              <i class="bx bx-save"></i> Save
+            </button>
+            <button id="editor-close-btn" class="close-btn" title="Close Editor"><i class="bx bx-x"></i></button>
+          </div>
+        </div>
+        
+        <div class="editor-body-wrapper" style="position: relative; flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; height: calc(100% - 35px - 28px);">
+          <!-- Antigravity Empty State Screen -->
+          <div id="editor-empty-state" class="editor-empty-state">
+            <div class="empty-state-content">
+              <div class="antigravity-logo-large">
+                <i class="bx bxs-paper-plane animate-float"></i>
+                <h2>VIP Assistant</h2>
+              </div>
+          </div>
+        </div>
+          
+          <!-- Editor Core Textarea container -->
+          <div id="editor-core-container" class="editor-core-container hidden" style="width: 100%; height: 100%;">
+            <textarea id="file-content-editor" class="file-editor-textarea" spellcheck="false" placeholder="Select a file to edit..."></textarea>
+          </div>
+        </div>
+        
+        <div id="editor-statusbar" class="editor-statusbar">
+          <div class="editor-status-left">
+            <span id="editor-file-info">Ready</span>
+          </div>
+          <div class="editor-status-right">
+            <span id="editor-lint-warning" class="lint-warning hidden"><i class="bx bx-error"></i> Syntax Error</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Drag Resizer Bar -->
+      <div id="resizer-bar" class="resizer-bar"></div>
+
+      <!-- Main Chat Workspace (Right Agent Panel) -->
+      <main id="chat-panel">
+        <!-- Top Navigation -->
+        <header id="chat-header">
+          <div class="header-left">
+            <div class="status-indicator">
+              <span id="status-dot" class="status-dot offline"></span>
+              <span id="status-text">Disconnected</span>
+            </div>
+            <span class="separator">|</span>
+            <div class="model-badge" style="padding: 0; display: inline-flex; align-items: center; gap: 4px;">
+              <i class="bx bx-chip" style="margin-left: 8px;"></i>
+              <select id="chat-model-selector" class="chat-model-select">
+                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+              </select>
+              <span id="active-model-name" class="hidden"></span>
+            </div>
+          </div>
+          
+          <div class="header-right">
+            <button id="chat-undo-btn" class="action-btn" title="Undo Last AI File Modification">
+              <i class="bx bx-undo"></i> Undo
+            </button>
+            <button id="clear-chat-btn" class="action-btn" title="Clear Chat History">
+              <i class="bx bx-trash"></i> Clear Chat
+            </button>
+          </div>
+        </header>
+        
+        <!-- Messages Canvas -->
+        <section id="chat-history-container">
+          <!-- Proactive System Anomaly Alerts -->
+          <div id="anomaly-banner-container" class="hidden"></div>
+  
+          <!-- Welcome Screen -->
+          <div id="welcome-screen" class="welcome-container">
+            <div class="welcome-logo">
+              <i class="bx bxs-bot animate-float"></i>
+            </div>
+            <h1>VIP Agent</h1>
+            <p class="subtitle">Ask anything, @ to mention, / for workflows.</p>
+            
+            <div class="quick-starts">
+              <h3>Suggested prompts</h3>
+              <div class="prompts-row" style="flex-direction: column; gap: 8px;">
+                <button class="prompt-chip" data-prompt="Show files in my workspace.">Show files in workspace</button>
+                <button class="prompt-chip" data-prompt="Search files in the project for 'Express'.">Search for 'Express'</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Chat messages get appended here dynamically -->
+          <div id="message-list"></div>
+        </section>
+        
+        <!-- Interactive Terminal overlay for running tools -->
+        <div id="terminal-stream-overlay" class="terminal-overlay hidden">
+          <div class="terminal-header">
+            <div class="terminal-title">
+              <i class="bx bx-terminal"></i> Terminal: <span id="running-command-text">node server.js</span>
+            </div>
+            <div class="terminal-controls">
+              <span class="terminal-badge active">Streaming</span>
+            </div>
+          </div>
+          <div id="terminal-output-container" class="terminal-body">
+            <!-- Live console output goes here -->
+          </div>
+        </div>
+        
+        <!-- Input Panel -->
+        <footer id="chat-input-panel">
+          <div class="input-container">
+            <textarea id="message-input" placeholder="Ask anything, @ to mention, / for workflows..." rows="1"></textarea>
+            <div class="input-actions">
+              <div class="left-actions">
+                <button id="toggle-approve-quick" class="quick-toggle-btn active" title="Toggle Auto-Approve Commands">
+                  <i class="bx bx-shield-alt-2"></i> Auto-Approve: <span id="quick-approve-status">ON</span>
+                </button>
+                <button id="voice-input-btn" class="quick-toggle-btn" title="Speak to Assistant">
+                  <i class="bx bx-microphone"></i> Voice: <span id="voice-status">OFF</span>
+                </button>
+              </div>
+              <button id="send-message-btn" class="send-btn" disabled>
+                <i class="bx bx-send"></i>
+              </button>
+            </div>
+          </div>
+        </footer>
+      </main>
+
+    </div>
+    
+    <!-- Right Sidebar: Log Monitor & System State -->
+    <aside id="logs-panel" class="hidden">
+      <div class="logs-panel-header">
+        <i class="bx bx-slider"></i> SYSTEM ACTIVITY LOG
+      </div>
+      <div id="activity-log-feed" class="log-feed">
+        <div class="log-entry system">System initialized. Connected to workspace.</div>
+      </div>
+      <div class="system-stats">
+        <div class="stat-row">
+          <span>Active Provider:</span>
+          <strong id="stat-provider">Gemini</strong>
+        </div>
+        <div class="stat-row">
+          <span>Connection:</span>
+          <span id="stat-connection" class="text-success">Connected</span>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Settings Dialog Modal -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><i class="bx bx-cog"></i> Settings</h2>
+        <button id="close-settings-btn" class="close-btn"><i class="bx bx-x"></i></button>
+      </div>
+      <div class="modal-body">
+        
+        <!-- API Configuration -->
+        <div class="settings-section">
+          <h3><i class="bx bx-key"></i> Provider Configuration</h3>
+          
+          <div class="form-group">
+            <label for="settings-provider">LLM Provider</label>
+            <select id="settings-provider" class="form-input">
+              <option value="gemini">Google Gemini (Default)</option>
+              <option value="anthropic">Anthropic Claude</option>
+              <option value="nvidia">NVIDIA NIM Cloud</option>
+              <option value="ollama">Ollama (Local)</option>
+            </select>
+          </div>
+          
+          <div class="form-group">
+            <label for="settings-model">Model Name</label>
+            <select id="settings-model" class="form-input">
+              <!-- Gemini Models -->
+              <option value="gemini-2.5-flash">gemini-2.5-flash (Fast & Lightweight)</option>
+              <option value="gemini-2.5-pro">gemini-2.5-pro (Highly Capable)</option>
+              <!-- Anthropic Models -->
+              <option value="claude-3-5-sonnet-20241022" class="hidden-option">claude-3-5-sonnet-20241022</option>
+              <option value="claude-3-7-sonnet-20250219" class="hidden-option">claude-3-7-sonnet-20250219</option>
+              <!-- NVIDIA Models -->
+              <option value="meta/llama-3.1-70b-instruct" class="hidden-option">meta/llama-3.1-70b-instruct (70B)</option>
+              <option value="meta/llama-3.1-8b-instruct" class="hidden-option">meta/llama-3.1-8b-instruct (8B)</option>
+              <!-- Ollama Models will be added dynamically -->
+            </select>
+          </div>
+          
+          <div class="form-group">
+            <label for="settings-api-key">API Key</label>
+            <input type="password" id="settings-api-key" class="form-input" placeholder="sk-..." />
+            <small class="helper-text">If left empty, the server's .env key will be used.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="settings-temp-alert-threshold">CPU Temp Warning Threshold (°C)</label>
+            <input type="number" id="settings-temp-alert-threshold" class="form-input" min="50" max="105" value="85" />
+            <small class="helper-text">Trigger alert if CPU temperature exceeds this value when idle.</small>
+          </div>
+        </div>
+
+        <!-- Agent Persona Configuration -->
+        <div class="settings-section">
+          <h3><i class="bx bx-user-pin"></i> Agent Persona & Role</h3>
+          
+          <div class="form-group">
+            <label for="settings-persona">Select Role Template</label>
+            <select id="settings-persona" class="form-input">
+              <option value="default">Default General Assistant</option>
+              <option value="frontend">Frontend Specialist (CSS/HTML/JS, UX-focused)</option>
+              <option value="devops">DevOps & System Admin (Bash, Services, Diagnostics)</option>
+              <option value="bughunter">Bug Hunter & Tester (Debugging, Test Suites, RAG Search)</option>
+              <option value="custom">Custom Persona Prompt...</option>
+            </select>
+          </div>
+          
+          <div class="form-group hidden" id="custom-prompt-group">
+            <label for="settings-custom-prompt">Custom System Prompt</label>
+            <textarea id="settings-custom-prompt" class="form-input" style="height: 100px; resize: vertical;" placeholder="Define the agent's behavior, instructions, and rules..."></textarea>
+          </div>
+        </div>
+
+        <!-- Workspace Configuration -->
+        <div class="settings-section">
+          <h3><i class="bx bx-folder"></i> Workspace Location</h3>
+          
+          <div class="form-group">
+            <label for="settings-workspace-path">Active Workspace Path</label>
+            <div class="input-with-button">
+              <input type="text" id="settings-workspace-path" class="form-input" placeholder="/absolute/path/to/folder" />
+              <button id="browse-settings-folder-btn" class="browse-btn" title="Choose folder on your computer">
+                <i class="bx bx-folder"></i> Browse
+              </button>
+            </div>
+            <small class="helper-text">Enter the absolute path of the directory you want to work in.</small>
+          </div>
+        </div>
+
+        <!-- Security / Execution settings -->
+        <div class="settings-section">
+          <h3><i class="bx bx-shield"></i> Security & Permissions</h3>
+          
+          <div class="toggle-group">
+            <div class="toggle-label-desc">
+              <strong>Auto-Approve Command Tools</strong>
+              <p>Allow VIP Assistant to execute files/commands without popping up an approval dialog.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="settings-auto-approve" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button id="save-settings-btn" class="save-btn">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+
+
+  <!-- Open Folder Dialog Modal -->
+  <div id="open-folder-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><i class="bx bx-folder-open"></i> Open Folder</h2>
+        <button id="close-folder-modal-btn" class="close-btn"><i class="bx bx-x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="new-workspace-path-input">Folder Path</label>
+          <div class="input-with-button">
+            <input type="text" id="new-workspace-path-input" class="form-input" placeholder="/absolute/path/to/folder" />
+            <button id="browse-folder-btn" class="browse-btn" title="Choose folder on your computer">
+              <i class="bx bx-folder"></i> Browse
+            </button>
+          </div>
+          <small class="helper-text">Enter the absolute path of the folder you want to open in VIP Assistant.</small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="confirm-open-folder-btn" class="save-btn">Open Folder</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Simple toast notification -->
+  <div id="toast-notification" class="toast hidden">
+    <span id="toast-message">Notification message</span>
+  </div>
+
+  <!-- JavaScript logic -->
+  <script src="app.js"></script>
+</body>
+</html>

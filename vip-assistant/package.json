@@ -1,0 +1,25 @@
+{
+  "name": "vip-assistant",
+  "version": "1.0.0",
+  "description": "VIP Assistant - Sleek Web-based Local AI Agent Platform",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@google/generative-ai": "^0.21.0",
+    "chokidar": "^4.0.1",
+    "dotenv": "^16.4.5",
+    "execa": "^9.5.1",
+    "express": "^4.21.1",
+    "glob": "^11.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}
