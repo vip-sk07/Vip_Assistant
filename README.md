@@ -25,9 +25,9 @@ The frontend features a **premium dark-mode Glassmorphic aesthetic**.
 
 ## 📸 Screenshots
 
-*(Add your screenshots here by replacing the placeholder links)*
-- **Workspace Explorer & Chat Interface:** `![UI Overview](images/screenshot1.png)`
-- **Advanced RAG in Action:** `![RAG Search](images/screenshot2.png)`
+- **Workspace Explorer & Chat Interface:** 
+  
+  ![UI Overview](images/ui_preview.png)
 
 ---
 
