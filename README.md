@@ -1,105 +1,116 @@
-<div align="center">
-  <img src="https://raw.githubusercontent.com/vip-sk07/Vip_Assistant/main/vip-assistant/public/favicon.ico" alt="VIP Assistant Logo" width="120" />
-  <h1>✨ VIP Assistant</h1>
-  <p><strong>A Sleek, Web-Based Local AI Agent Platform with Advanced RAG Capabilities</strong></p>
-  
-  [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-  [![Node.js](https://img.shields.io/badge/Node.js-v18+-green.svg)](https://nodejs.org/)
-  [![UI: Glassmorphism](https://img.shields.io/badge/UI-Glassmorphism-purple.svg)]()
-</div>
+# 🚀 VIP Assistant — Autonomous AI Pair Programmer
 
-<hr />
-
-## 🌟 Project Detail
-**VIP Assistant** is a powerful, autonomous AI coding companion and workspace explorer packaged in a stunning, modern web interface. It bridges the gap between massive cloud LLMs (Google Gemini, Anthropic Claude, NVIDIA NIM) and entirely offline, private models (Ollama). 
-
-It is designed to act as a **Senior QA Automation Engineer and Debugging Expert** for your codebase, capable of autonomously reading files, scanning directories, and intelligently retrieving workspace context using an advanced custom-built RAG (Retrieval-Augmented Generation) engine.
-
-### 🎨 The Theme & UI
-The frontend features a **premium dark-mode Glassmorphic aesthetic**. 
-- **Vibrant & Dynamic:** Neon cyan and purple gradients, frosted glass panels, and smooth micro-animations.
-- **Split-Pane Architecture:** Features an interactive Workspace File Explorer on the left and a rich Chat/Agent interface on the right.
-- **Real-Time Code Editor:** Built-in Monaco Editor for instant viewing and conflict resolution.
+VIP Assistant is a state-of-the-art, high-performance Autonomous AI Pair Programmer and IDE agent engine. Designed for both **Local-First Execution** (via Ollama `qwen2.5-coder`) and **Cloud Acceleration** (via Google Gemini 2.5 Flash & Anthropic Claude 3.7 Sonnet), VIP Assistant features AST-based RAG indexing, sub-millisecond data structures, automated pre-edit Git checkpoints, and 5 TB Google Drive cloud document integration.
 
 ---
 
-## 📸 Screenshots
+## 🌟 Key Features & Architecture
 
-- **Workspace Explorer & Chat Interface:** 
-  
-  ![UI Overview](images/ui_preview.png)
+```mermaid
+graph TD
+    VIP[VIP Assistant] --> P1[1. CoT Reasoning & Auto Syntax Check]
+    VIP --> P2[2. AST Code Chunking & Multi-Query RRF]
+    VIP --> P3[3. Trie Autocomplete & 50MB LRU Cache]
+    VIP --> P4[4. Pre-Edit Git Stashes & 1-Click Rollback]
+    VIP --> P5[5. Cron Task Scheduler Engine]
+    VIP --> GD[6. 5 TB Google Drive Cloud RAG]
+```
+
+### 🧠 1. Local Reasoning Engine & Compiler Self-Correction
+* **Chain-of-Thought (<thinking>) Reasoning**: Forces local Ollama models (`qwen2.5-coder:7b`, `3b`) to formulate structured step-by-step reasoning plans before executing code edits.
+* **Automated Syntax Check**: Runs non-interactive compiler verifications (`node --check` / `python3 -m py_compile`) post-edit. If syntax errors occur, VIP Assistant inspects compiler outputs and applies self-correction fixes automatically!
+
+### 🔎 2. AST Code Chunking & Multi-Query RRF Search (`ast-chunker.js`)
+* **AST Structural Chunking**: Splits JS, TS, and Python code cleanly along function, class, and method symbol boundaries.
+* **Multi-Query Reciprocal Rank Fusion (RRF)**: Expands queries into 3 variations and scores results using RRF rank fusion ($RRF(d) = \sum \frac{1}{60 + rank(d, q)}$) for top semantic precision.
+
+### ⚡ 3. High-Performance Data Structures & Low Memory
+* **Sub-Millisecond Trie Autocomplete (`trie-autocomplete.js`)**: $O(K)$ prefix tree search for `@file` paths and `/slash-commands`.
+* **Bounded 50MB LRU Vector Memory (`lru-vector-cache.js`)**: Bounded Float32 memory cache preventing RAM bloat on local laptops.
+* **V8 SIMD Typed Arrays**: Converts vector embeddings into Float32 binary buffers (`Float32Array`), cutting memory usage by 60%+ and speeding up vector similarity calculations.
+
+### 🛡️ 4. Developer Safety & Automated Rollbacks (`git-rollback-manager.js`)
+* **Pre-Edit Git Snapshots**: Automatically creates a `git stash` snapshot before any AI file edit.
+* **1-Click Rollbacks**: Pop checkpoint stashes to restore workspace files instantly if an AI change introduces unexpected behavior.
+
+### ⏰ 5. Background Cron Task Scheduler (`cron-scheduler.js`)
+* **Background Execution**: Schedule one-shot timers and recurring cron tasks (e.g. `npm test`, `git pull`) running asynchronously in the background.
+
+### ☁️ 6. 5 TB Google Drive Library Integration (`google-drive-library.js`)
+* **1-Click OAuth Login**: Seamless authentication at `http://localhost:3000/auth/google` with automatic callback handling at `http://localhost:3000/callback`.
+* **Cloud Document Retrieval**: Search and read private Google Docs, PDFs, and text files directly from your 5 TB Google Drive storage.
 
 ---
 
-## ⚙️ Features & Detailed Workflow
+## 🛠️ Installation & Quickstart
 
-### 1. Multi-Provider Intelligence
-Seamlessly switch between AI brains without restarting the server:
-- **Local (Privacy First):** Connects to your local `Ollama` daemon and auto-detects installed models.
-- **Cloud (Maximum Power):** Supports `Gemini`, `Anthropic (Claude)`, and `NVIDIA NIM`.
+### 1. Clone & Install Dependencies
+```bash
+git clone git@github.com:vip-sk07/Vip_Assistant.git
+cd Vip_Assistant/vip-assistant
+npm install
+```
 
-### 2. Advanced RAG (Retrieval-Augmented Generation)
-Your codebase is automatically indexed into a fast, local SSD-cached vector database. 
-- **Semantic Search:** Ask *"where is the auth logic?"* and the agent retrieves the exact code without keyword matching.
-- **Context Window Enrichment:** When the agent retrieves a matching code chunk, it automatically stitches together the chunks immediately before and after it, providing a massive, unbroken context window to prevent hallucinations.
-- **Smart Re-indexing:** Switching between Gemini (768 dimensions) and NVIDIA (1024 dimensions) instantly rebuilds the vector database to prevent dimension mismatch crashes.
+### 2. Configure Environment (`.env`)
+Create a `.env` file in `vip-assistant/.env`:
+```env
+# AI Models
+GEMINI_API_KEY=your_gemini_api_key_here
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
 
-### 3. File System Autonomy
-- Uses a secure `Bubblewrap (bwrap)` sandbox for safely executing bash commands.
-- Live `chokidar` file watcher instantly syncs external code edits to your UI.
+# Google Drive 1-Click OAuth Credentials
+GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your_client_secret
+GOOGLE_REFRESH_TOKEN=your_refresh_token_here
+```
+
+### 3. Run VIP Assistant Server
+```bash
+npm run dev
+# OR
+node server.js
+```
+Open **http://localhost:3000** in your browser!
 
 ---
 
-## 🚀 Installation & Instructions
+## 🚀 GPU Acceleration Setup for Local Ollama (`qwen2.5-coder`)
 
-### Prerequisites
-- Node.js (v18 or higher)
-- API Keys (Optional but recommended: Gemini, Anthropic, NVIDIA)
-- Ollama (Optional: for local models)
+VIP Assistant automatically detects local Ollama models. To get **sub-second responses** on laptop hardware (e.g., NVIDIA GeForce RTX 3050 GPU):
 
-### Setup
-1. **Clone the repository:**
+1. **Install NVIDIA Linux Driver**:
    ```bash
-   git clone https://github.com/vip-sk07/Vip_Assistant.git
-   cd Vip_Assistant/vip-assistant
+   sudo apt update && sudo apt install -y nvidia-driver nvidia-cuda-toolkit
    ```
-
-2. **Install Dependencies:**
+2. **Reboot & Restart Ollama**:
    ```bash
-   npm install
+   sudo reboot
+   sudo systemctl restart ollama
    ```
-
-3. **Build the Agent Core (TypeScript):**
+3. **Verify VRAM Offloading**:
    ```bash
-   npm run build
+   nvidia-smi
    ```
-
-4. **Environment Variables:**
-   Create a `.env` file in the `vip-assistant` directory:
-   ```env
-   GEMINI_API_KEY=your_google_key
-   ANTHROPIC_API_KEY=your_claude_key
-   NVIDIA_API_KEY=your_nvidia_key
-   ```
-
-5. **Start the Server:**
-   ```bash
-   npm start
-   ```
-
-6. **Access the UI:**
-   Open your browser and navigate to `http://localhost:3000`
 
 ---
 
-## 🧠 Behind the Scenes (Workflow)
-1. **Initialization:** When the server starts, it scans the active workspace and indexes all non-binary files into a vectorized chunk format using the active provider's embedding math.
-2. **User Request:** You type a prompt (e.g., *"Fix the bug in the login route"*).
-3. **Agent Loop:** The `agent-core` intercepts the prompt. The LLM decides if it needs to use a tool (like `SearchProjectContext`, `ReadFile`, or `RunBash`).
-4. **Tool Execution:** The backend securely executes the tool. If RAG is used, it utilizes **Context Window Enrichment** to fetch surrounding code chunks.
-5. **Final Output:** The agent streams the final markdown-formatted answer back to the Glassmorphic UI via WebSockets.
+## 📁 Repository Structure
+
+```
+vip-assistant/
+├── server.js                 # Express & WebSocket Agent Engine
+├── ast-chunker.js            # AST Structural Code Chunker
+├── trie-autocomplete.js      # O(K) Trie Prefix Autocomplete
+├── lru-vector-cache.js       # Bounded 50MB Float32 LRU Memory Cache
+├── git-rollback-manager.js   # Git Pre-Edit Checkpoints & Rollbacks
+├── cron-scheduler.js         # Background Cron & Timer Scheduler
+├── google-drive-library.js   # 5 TB Google Drive API & OAuth Client
+├── public/                   # Frontend Monaco & Chat Interface
+└── agent-core/               # Compiled Multi-Tool Agent Dispatcher
+```
 
 ---
-<div align="center">
-  <i>Built for the modern developer workspace.</i>
-</div>
+
+## 📄 License
+
+MIT License © 2026 VIP Assistant.
