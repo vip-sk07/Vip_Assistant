@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { google } from 'googleapis';
 
 const execAsync = promisify(exec);
 
@@ -23,6 +24,18 @@ import {
   WebSearchTool
 } from './agent-core/dist/tools/builtins.js';
 import { setToolProgressHandler } from './agent-core/dist/engine/toolDispatch.js';
+import { chunkCodeStructurally } from './ast-chunker.js';
+import { TrieAutocomplete } from './trie-autocomplete.js';
+import { LRUVectorCache } from './lru-vector-cache.js';
+import { GitRollbackManager } from './git-rollback-manager.js';
+import { CronSchedulerEngine } from './cron-scheduler.js';
+
+import { 
+  createDriveClient, 
+  listDriveFiles, 
+  fetchDriveFileContent, 
+  indexDriveFolderToRAG 
+} from './google-drive-library.js';
 
 dotenv.config();
 
@@ -87,6 +100,83 @@ setToolProgressHandler(({ toolName, event }) => {
 app.use(express.json());
 app.use(express.static('public'));
 
+// Google Drive OAuth2 Routes
+app.get('/auth/google', (req, res) => {
+  dotenv.config({ override: true });
+  try { dotenv.config({ path: path.join(WORKSPACE_DIR, '.env'), override: true }); } catch (e) {}
+  
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_DRIVE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_DRIVE_CLIENT_SECRET;
+  
+  if (!clientId || !clientSecret) {
+    return res.status(400).send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>OAuth Setup Required</title></head>
+      <body style="font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; background: #0f172a; color: #f8fafc; line-height: 1.6;">
+        <h2 style="color: #ef4444;">🔑 GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET Required</h2>
+        <p>To use 1-Click Google Drive Login, please add your Google OAuth2 credentials to your <code>vip-assistant/.env</code> file:</p>
+        <pre style="background: #1e293b; padding: 15px; border-radius: 8px; color: #38bdf8;">GOOGLE_CLIENT_ID=your_client_id_here.apps.googleusercontent.com\nGOOGLE_CLIENT_SECRET=your_client_secret_here</pre>
+        <p>Once saved, refresh this page to complete your 1-click Google Drive authorization!</p>
+      </body>
+      </html>
+    `);
+  }
+  const redirectUri = `${req.protocol}://${req.get('host')}/callback`;
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: ['https://www.googleapis.com/auth/drive.readonly'],
+    prompt: 'consent'
+  });
+  res.redirect(authUrl);
+});
+
+const handleOAuthCallback = async (req, res) => {
+  const code = req.query.code;
+  if (!code) {
+    return res.status(400).send('<h3>OAuth Callback Error: No authorization code received.</h3>');
+  }
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_DRIVE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_DRIVE_CLIENT_SECRET;
+    const redirectUri = `${req.protocol}://${req.get('host')}${req.path}`;
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+    const { tokens } = await oauth2Client.getToken(code);
+    
+    if (tokens.refresh_token) {
+      process.env.GOOGLE_REFRESH_TOKEN = tokens.refresh_token;
+      const envPath = path.join(WORKSPACE_DIR, '.env');
+      let envContent = '';
+      try { envContent = await fs.readFile(envPath, 'utf8'); } catch (e) {}
+      if (!envContent.includes('GOOGLE_REFRESH_TOKEN=')) {
+        envContent += `\nGOOGLE_REFRESH_TOKEN=${tokens.refresh_token}\n`;
+      } else {
+        envContent = envContent.replace(/GOOGLE_REFRESH_TOKEN=.*/, `GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}`);
+      }
+      await fs.writeFile(envPath, envContent, 'utf8');
+      console.log('[GoogleDrive] Successfully exchanged code for refresh token and saved to .env!');
+    }
+    
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>Google Drive Connected!</title></head>
+      <body style="font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: #f8fafc;">
+        <h1 style="color: #10b981;">🎉 Google Drive Connected Successfully!</h1>
+        <p style="font-size: 1.1rem; color: #94a3b8;">VIP Assistant is now authorized to access your Google Drive library.</p>
+        <a href="/" style="display: inline-block; margin-top: 20px; padding: 12px 24px; background: #3b82f6; color: white; border-radius: 8px; text-decoration: none; font-weight: bold;">Return to VIP Assistant</a>
+      </body>
+      </html>
+    `);
+  } catch (err) {
+    res.status(500).send(`<h3>OAuth Token Exchange Error: ${err.message}</h3>`);
+  }
+};
+
+app.get('/callback', handleOAuthCallback);
+app.get('/api/drive-auth', handleOAuthCallback);
+
 // Git Assistant Helpers
 async function getGitBranch() {
   try {
@@ -146,6 +236,23 @@ function resolveSafePath(relativeOrAbsolutePath) {
 
 // Local Vector Database for RAG Context
 const vectorDb = [];
+
+// Phase 3 High-Performance Data Structures & Phase 4 Rollback Manager & Phase 5 Cron Scheduler
+const workspaceTrie = new TrieAutocomplete();
+const lruVectorCache = new LRUVectorCache(50); // Bounded 50 MB Float32 LRU Cache
+const rollbackManager = new GitRollbackManager(WORKSPACE_DIR);
+const cronScheduler = new CronSchedulerEngine();
+
+// Populate default Slash Commands into Trie
+const DEFAULT_SLASH_COMMANDS = [
+  { key: '/clear', type: 'command', description: 'Clear conversation chat history' },
+  { key: '/help', type: 'command', description: 'View available tools and commands' },
+  { key: '/undo', type: 'command', description: 'Undo the last AI file edit' },
+  { key: '/git-status', type: 'command', description: 'Show uncommitted git changes' },
+  { key: '/telemetry', type: 'command', description: 'Show system CPU & RAM metrics' }
+];
+
+DEFAULT_SLASH_COMMANDS.forEach(cmd => workspaceTrie.insert(cmd.key, cmd));
 
 async function getEmbedding(text, apiKey) {
   const provider = process.env.ACTIVE_PROVIDER;
@@ -239,11 +346,11 @@ async function getEmbedding(text, apiKey) {
 }
 
 function dotProduct(vecA, vecB) {
-  if (!vecA || !vecB || vecA.length !== vecB.length) {
-    return 0;
-  }
+  if (!vecA || !vecB) return 0;
+  const len = vecA.length;
+  if (len !== vecB.length) return 0;
   let product = 0;
-  for (let i = 0; i < vecA.length; i++) {
+  for (let i = 0; i < len; i++) {
     product += vecA[i] * vecB[i];
   }
   return product;
@@ -262,30 +369,29 @@ async function indexFile(filePath, apiKey) {
     }
     
     const content = await fs.readFile(fullPath, 'utf8');
-    if (content.includes('\u0000') || content.length > 500000) {
-      return; // Skip binary or huge files
+    if (content.includes('\u0000') || content.length > 200000) {
+      return; // Skip binary or huge build/log files (>200KB) to save RAM and time
     }
     
-    const chunkSize = 1500;
-    const overlap = 200;
-    const chunks = [];
-    for (let i = 0; i < content.length; i += chunkSize - overlap) {
-      const chunk = content.substring(i, i + chunkSize);
-      chunks.push(chunk);
-      if (i + chunkSize >= content.length) break;
-    }
+    // Phase 2: AST Structural Code Chunking
+    const chunks = chunkCodeStructurally(content, filePath);
     
     for (let idx = 0; idx < chunks.length; idx++) {
-      const chunkText = chunks[idx];
-      const embedding = await getEmbedding(chunkText, apiKey);
+      const c = chunks[idx];
+      const rawEmbedding = await getEmbedding(c.content, apiKey);
       vectorDb.push({
         filePath,
         chunkIndex: idx,
-        content: chunkText,
-        embedding
+        symbolName: c.symbolName || 'module',
+        symbolType: c.symbolType || 'general',
+        startLine: c.startLine || 1,
+        endLine: c.endLine || 1,
+        content: c.content,
+        parentContent: content,
+        embedding: new Float32Array(rawEmbedding) // High-performance Float32 binary buffer
       });
     }
-    console.log(`[RAG] Indexed file: ${filePath} (${chunks.length} chunks)`);
+    console.log(`[RAG-AST] Indexed file: ${filePath} (${chunks.length} structural chunks)`);
     await saveVectorDbToDisk();
   } catch (err) {
     console.error(`[RAG] Failed to index file ${filePath}:`, err.message);
@@ -300,8 +406,12 @@ async function saveVectorDbToDisk() {
     const dataToSave = vectorDb.map(item => ({
       filePath: item.filePath,
       chunkIndex: item.chunkIndex,
+      symbolName: item.symbolName || 'module',
+      symbolType: item.symbolType || 'general',
+      startLine: item.startLine || 1,
+      endLine: item.endLine || 1,
       content: item.content,
-      embedding: item.embedding
+      embedding: Array.from(item.embedding)
     }));
     await fs.writeFile(cacheFile, JSON.stringify(dataToSave, null, 2), 'utf8');
     console.log(`[RAG] Vector database cached to SSD: ${cacheFile}`);
@@ -320,8 +430,13 @@ async function loadVectorDbFromDisk() {
     const parsed = JSON.parse(content);
     if (Array.isArray(parsed)) {
       vectorDb.length = 0;
-      vectorDb.push(...parsed);
-      console.log(`[RAG] Loaded ${vectorDb.length} chunks from SSD cache.`);
+      for (const item of parsed) {
+        if (item && item.embedding) {
+          item.embedding = new Float32Array(item.embedding); // Optimize loaded memory footprint
+        }
+        vectorDb.push(item);
+      }
+      console.log(`[RAG] Loaded ${vectorDb.length} chunks from SSD cache into Float32 binary memory.`);
       return true;
     }
   } catch (err) {
@@ -352,8 +467,8 @@ async function indexWorkspace(apiKey) {
     console.log(`[RAG] Found ${filteredFiles.length} text files to index.`);
     for (const file of filteredFiles) {
       await indexFile(file, apiKey);
-      // Wait 4 seconds between files to prevent 429 quota exhaustion
-      await new Promise(resolve => setTimeout(resolve, 4000));
+      // Small 50ms delay per file for fast background indexing without rate limits
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
     console.log(`[RAG] Workspace indexing complete. Total indexed chunks: ${vectorDb.length}`);
     await saveVectorDbToDisk();
@@ -463,12 +578,46 @@ async function updateWorkspaceDir(newPath) {
   }
 }
 
-// Rolling Session Audit Log Helper
+function detectRuntimeError(outputStr) {
+  if (!outputStr || typeof outputStr !== 'string') return null;
+  const patterns = [
+    /SyntaxError: [^\n]+/i,
+    /ReferenceError: [^\n]+/i,
+    /TypeError: [^\n]+/i,
+    /ModuleNotFoundError: [^\n]+/i,
+    /Error: Cannot find module [^\n]+/i,
+    /EADDRINUSE:? [^\n]+/i,
+    /Permission denied/i,
+    /command not found/i,
+    /BUILD FAILED/i,
+    /Compilation failed/i,
+    /FATAL ERROR: [^\n]+/i
+  ];
+  for (const pat of patterns) {
+    const match = outputStr.match(pat);
+    if (match) return match[0];
+  }
+  return null;
+}
+
+// Rolling Session Audit Log Helper with Auto-Rotation (2MB Limit)
 async function appendSessionLog(entry) {
   try {
     const logPath = path.join(WORKSPACE_DIR, '.vip_assistant_session.log');
     const timestamp = new Date().toISOString();
     const logLine = `[${timestamp}] ${JSON.stringify(entry)}\n`;
+    
+    // Check log file size and rotate if > 2MB
+    try {
+      const stats = await fs.stat(logPath);
+      if (stats.size > 2 * 1024 * 1024) {
+        const content = await fs.readFile(logPath, 'utf8');
+        const lines = content.trim().split('\n');
+        const truncated = lines.slice(-500).join('\n') + '\n';
+        await fs.writeFile(logPath, truncated, 'utf8');
+      }
+    } catch {}
+    
     await fs.appendFile(logPath, logLine, 'utf8');
   } catch (err) {
     console.error('Failed to append to session log:', err.message);
@@ -485,6 +634,23 @@ function pushToUndoStack(filePath, oldContent) {
   undoStack.push({ filePath, oldContent });
 }
 
+async function verifyCodeSyntax(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  try {
+    if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
+      await execAsync(`node --check "${filePath}"`);
+      return { success: true };
+    }
+    if (ext === '.py') {
+      await execAsync(`python3 -m py_compile "${filePath}"`);
+      return { success: true };
+    }
+  } catch (err) {
+    return { success: false, error: err.stderr || err.stdout || err.message };
+  }
+  return { success: true };
+}
+
 const wrappedFileWriteTool = {
   ...FileWriteTool,
   async *execute(input, ctx) {
@@ -496,7 +662,19 @@ const wrappedFileWriteTool = {
       // File didn't exist yet
     }
     pushToUndoStack(abs, oldContent);
-    yield* FileWriteTool.execute(input, ctx);
+    await rollbackManager.createCheckpoint(`Pre-write: ${input.file_path}`);
+    
+    for await (const res of FileWriteTool.execute(input, ctx)) {
+      const verify = await verifyCodeSyntax(abs);
+      if (!verify.success) {
+        yield {
+          ...res,
+          content: `${res.content || ''}\n\n⚠️ [Automated Code Verification Alert]: Syntax check failed for ${input.file_path}:\n${verify.error}\nPlease examine the syntax error and apply a self-correction fix.`
+        };
+      } else {
+        yield res;
+      }
+    }
   }
 };
 
@@ -511,7 +689,19 @@ const wrappedFileEditTool = {
       // File didn't exist
     }
     pushToUndoStack(abs, oldContent);
-    yield* FileEditTool.execute(input, ctx);
+    await rollbackManager.createCheckpoint(`Pre-edit: ${input.file_path}`);
+    
+    for await (const res of FileEditTool.execute(input, ctx)) {
+      const verify = await verifyCodeSyntax(abs);
+      if (!verify.success) {
+        yield {
+          ...res,
+          content: `${res.content || ''}\n\n⚠️ [Automated Code Verification Alert]: Syntax check failed for ${input.file_path}:\n${verify.error}\nPlease examine the syntax error and apply a self-correction fix.`
+        };
+      } else {
+        yield res;
+      }
+    }
   }
 };
 
@@ -734,8 +924,9 @@ const GetSystemLogsTool = {
     const limit = input.limit || 30;
     if (input.type === "system") {
       try {
-        const { stdout } = await execAsync(`journalctl -n ${limit} --no-pager`);
-        return { content: stdout || "(no system logs found)", isError: false };
+        const { stdout } = await execAsync(`journalctl -q -n ${limit} --no-pager`);
+        const clean = (stdout || "").trim().split('\n').filter(l => !l.startsWith('Hint:')).join('\n');
+        return { content: clean || "(no system logs found)", isError: false };
       } catch (err) {
         return { content: `Failed to fetch system logs: ${err.message}`, isError: true };
       }
@@ -796,45 +987,105 @@ const SearchProjectContextTool = {
     }
     
     try {
-      const queryEmbedding = await getEmbedding(input.query, apiKey);
-      
-      const scored = vectorDb.map(chunk => {
-        const score = dotProduct(queryEmbedding, chunk.embedding);
-        return { chunk, score };
-      });
-      
-      scored.sort((a, b) => b.score - a.score);
-      const top = scored.slice(0, limit);
-      
-      const formatted = top.map((item, idx) => {
-        // ADVANCEMENT 1: Context Window Enrichment (Sliding Window)
-        // Find adjacent chunks to give the LLM broader context
-        const fileChunks = vectorDb.filter(c => c.filePath === item.chunk.filePath);
-        const currIndex = item.chunk.chunkIndex;
-        
-        let enrichedContent = item.chunk.content;
-        const overlap = 200; // As defined in chunking logic
-        
-        const prevChunk = fileChunks.find(c => c.chunkIndex === currIndex - 1);
-        if (prevChunk) {
-          // Remove overlap from end of prev chunk
-          const trimmedPrev = prevChunk.content.substring(0, prevChunk.content.length - overlap);
-          enrichedContent = trimmedPrev + enrichedContent;
-        }
-        
-        const nextChunk = fileChunks.find(c => c.chunkIndex === currIndex + 1);
-        if (nextChunk) {
-          // Remove overlap from start of next chunk
-          const trimmedNext = nextChunk.content.substring(overlap);
-          enrichedContent = enrichedContent + trimmedNext;
-        }
+      // Phase 2: Multi-Query Generation & Reciprocal Rank Fusion (RRF)
+      const queries = [
+        input.query,
+        `${input.query} code implementation function class`,
+        `${input.query} export definition architecture`
+      ];
 
-        return `[Match ${idx + 1}] File: ${item.chunk.filePath} (Similarity: ${item.score.toFixed(3)})\n\`\`\`\n${enrichedContent}\n\`\`\``;
+      const rrfScores = new Map(); // dbIdx -> { chunk, score }
+
+      for (const q of queries) {
+        const rawEmb = await getEmbedding(q, apiKey);
+        const qEmb = new Float32Array(rawEmb);
+
+        const scored = vectorDb.map((chunk, idx) => ({
+          dbIdx: idx,
+          chunk,
+          score: dotProduct(qEmb, chunk.embedding)
+        }));
+
+        scored.sort((a, b) => b.score - a.score);
+
+        // Compute RRF score for top 15 matches of each query variation
+        scored.slice(0, 15).forEach((item, rank) => {
+          const rrf = 1 / (60 + (rank + 1));
+          const prev = rrfScores.get(item.dbIdx) || { chunk: item.chunk, score: 0 };
+          rrfScores.set(item.dbIdx, { chunk: item.chunk, score: prev.score + rrf });
+        });
+      }
+
+      const mergedResults = Array.from(rrfScores.values());
+      mergedResults.sort((a, b) => b.score - a.score);
+      const top = mergedResults.slice(0, limit);
+
+      const formatted = top.map((item, idx) => {
+        const c = item.chunk;
+        const symbolInfo = c.symbolName ? ` [${c.symbolType || 'symbol'}: ${c.symbolName}]` : '';
+        return `[Match ${idx + 1}] File: ${c.filePath}${symbolInfo} (RRF Score: ${item.score.toFixed(4)})\n\`\`\`\n${c.content}\n\`\`\``;
       }).join('\n\n');
-      
+
       return { content: formatted || "No matching code snippets found.", isError: false };
     } catch (err) {
-      return { content: `Semantic search failed: ${err.message}`, isError: true };
+      return { content: `Semantic RRF search failed: ${err.message}`, isError: true };
+    }
+  }
+};
+
+// Custom Google Drive Library tool for querying documents in Google Drive
+const SearchGoogleDriveLibraryTool = {
+  name: "SearchGoogleDriveLibrary",
+  description: "Search and fetch documents from the Google Drive library. Use this tool whenever the user asks to look up files, documents, or content stored in Google Drive.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "The search topic or document name to query in Google Drive" },
+      folderId: { type: "string", description: "Optional specific Google Drive folder ID to scope the search" }
+    },
+    required: ["query"]
+  },
+  validate(input) {
+    if (!input.query?.trim()) {
+      return { valid: false, message: "Search query cannot be empty", code: 400 };
+    }
+    return { valid: true };
+  },
+  async checkPermission(input, ctx) {
+    return { granted: true };
+  },
+  async *execute(input, ctx) {
+    try {
+      const drive = createDriveClient();
+      if (!drive) {
+        return { content: "Google Drive library is not configured. Please set a valid API key or Service Account key in Settings.", isError: true };
+      }
+      
+      const files = await listDriveFiles(drive, input.folderId || null, input.query);
+      if (!files || files.length === 0) {
+        return { content: `No matching documents found in Google Drive library for query: "${input.query}".`, isError: false };
+      }
+      
+      let summary = `Found ${files.length} document(s) in Google Drive library:\n\n`;
+      for (const f of files.slice(0, 5)) {
+        summary += `📄 **${f.name}**\n- Type: \`${f.mimeType}\` | Modified: ${f.modifiedTime}\n- Link: [Open Document](${f.webViewLink})\n`;
+        try {
+          const content = await fetchDriveFileContent(drive, f.id, f.mimeType);
+          const excerpt = content.substring(0, 400).replace(/\n+/g, ' ');
+          summary += `- *Content Excerpt*:\n> "${excerpt}..."\n\n`;
+        } catch (e) {
+          summary += `- *(Unable to preview document content: ${e.message})*\n\n`;
+        }
+      }
+      return { content: summary, isError: false };
+    } catch (err) {
+      if (err.message && (err.message.includes('API keys are not supported') || err.message.includes('OAuth2') || err.message.includes('sufficient permissions'))) {
+        return { 
+          content: `🔑 **Google Drive Authentication Notice**:\nGoogle Drive API requires an OAuth2 Access Token or Service Account Key to search private files.\n\nTo enable private Drive searching, add one of the following to your \`vip-assistant/.env\` file:\n\`\`\`env\nGOOGLE_DRIVE_OAUTH_TOKEN=your_oauth2_access_token\n# OR\nGOOGLE_DRIVE_SERVICE_ACCOUNT_PATH=/path/to/service-account.json\n\`\`\``, 
+          isError: false 
+        };
+      }
+      return { content: `Google Drive library search failed: ${err.message}`, isError: true };
     }
   }
 };
@@ -921,9 +1172,10 @@ wss.on('connection', (ws) => {
   let currentPermissionMode = null;
   let currentProvider = null;
   let currentSystemPrompt = null;
+  let currentApiKey = null;
   
   // Set default client settings and alerts tracking
-  ws.clientSettings = { tempAlertThreshold: 85 };
+  ws.clientSettings = { tempAlertThreshold: 98 };
   ws.lastAlerts = { ram: 0, temp: 0, journal: '' };
 
   // Seed the last journal error so old boot errors don't trigger alerts on connect
@@ -957,6 +1209,8 @@ wss.on('connection', (ws) => {
       }
     }
     const allFiles = await getWorkspaceFilesRecursive(WORKSPACE_DIR);
+    allFiles.forEach(f => workspaceTrie.insert(`@${f}`, { key: `@${f}`, type: 'file', path: f }));
+
     ws.send(JSON.stringify({
       type: 'init_workspace',
       workspace: WORKSPACE_DIR,
@@ -1025,6 +1279,7 @@ wss.on('connection', (ws) => {
         const targetModel = provider === 'ollama' ? `ollama/${settings.model}` : (provider === 'nvidia' ? `nvidia/${settings.model}` : settings.model);
         const targetPermissionMode = settings.autoApprove ? 'bypassPermissions' : 'default';
         const targetProvider = provider;
+        const targetApiKey = provider !== 'ollama' ? (settings.apiKey || (provider === 'gemini' ? process.env.GEMINI_API_KEY : (provider === 'nvidia' ? process.env.NVIDIA_API_KEY : process.env.ANTHROPIC_API_KEY))) || '' : '';
         
         const systemRecoveryPrompt = `
 === SYSTEM SERVICE RECOVERY INSTRUCTION ===
@@ -1037,35 +1292,51 @@ If you receive a system anomaly alert (such as high memory, CPU temperature warn
 3. Present the diagnostic findings clearly, and propose/execute the exact corrective commands (e.g. \`systemctl restart <service>\` or terminating a runaway background process) to recover system stability.
 `;
 
+        const ollamaReasoningPrompt = targetProvider === 'ollama' ? `
+=== HIGH-PERFORMANCE LOCAL REASONING & CHAIN-OF-THOUGHT ===
+You are an expert Autonomous AI Pair Programmer powered by state-of-the-art reasoning principles.
+When addressing coding tasks, bug fixes, or architecture design:
+1. Always formulate a clear step-by-step reasoning plan inside a <thinking> ... </thinking> block before performing edits or generating final code responses.
+2. Carefully inspect existing code structure, imports, and method signatures using tool calls before modifying files.
+3. Keep code modifications concise, precise, and fully typed without removing existing docstrings or unrelated logic.
+4. When writing code, ensure valid syntax. If an automated verification alert flags a syntax error, examine the compiler output and apply a self-correction fix immediately.
+` : '';
+
         const targetSystemPrompt = resolvePersonaPrompt(settings.persona, settings.customPrompt);
 
         // Initialize or re-initialize agent if settings changed
-        if (!agentInstance || currentModel !== targetModel || currentPermissionMode !== targetPermissionMode || currentProvider !== targetProvider || currentSystemPrompt !== targetSystemPrompt) {
+        if (!agentInstance || currentModel !== targetModel || currentPermissionMode !== targetPermissionMode || currentProvider !== targetProvider || currentSystemPrompt !== targetSystemPrompt || currentApiKey !== targetApiKey) {
           ws.send(JSON.stringify({ type: 'tool_log', text: `Initializing Agent Engine (${targetModel})...` }));
           try {
+            const agentTools = targetProvider === 'ollama'
+              ? [customBashTool, SearchGoogleDriveLibraryTool, SearchProjectContextTool, FileReadTool, wrappedFileWriteTool, wrappedFileEditTool]
+              : [
+                  customBashTool,
+                  GetSystemLogsTool,
+                  SearchProjectContextTool,
+                  SearchGoogleDriveLibraryTool,
+                  FileReadTool,
+                  wrappedFileWriteTool,
+                  wrappedFileEditTool,
+                  GlobTool,
+                  GrepTool,
+                  WebSearchTool
+                ];
+
             agentInstance = await createAgent({
               cwd: WORKSPACE_DIR,
               model: targetModel,
               permissionMode: targetPermissionMode,
               systemPrompt: undefined,
-              appendSystemPrompt: `${targetSystemPrompt ? targetSystemPrompt : ''}\n\n${systemRecoveryPrompt}`,
+              appendSystemPrompt: `${targetSystemPrompt ? targetSystemPrompt : ''}\n\n${ollamaReasoningPrompt}\n\n${systemRecoveryPrompt}`,
               disableBuiltinTools: true,
-              tools: [
-                customBashTool,
-                GetSystemLogsTool,
-                SearchProjectContextTool,
-                FileReadTool,
-                wrappedFileWriteTool,
-                wrappedFileEditTool,
-                GlobTool,
-                GrepTool,
-                WebSearchTool
-              ]
+              tools: agentTools
             });
             currentModel = targetModel;
             currentPermissionMode = targetPermissionMode;
             currentProvider = targetProvider;
             currentSystemPrompt = targetSystemPrompt;
+            currentApiKey = targetApiKey;
           } catch (err) {
             console.error('Agent creation failed:', err);
             return ws.send(JSON.stringify({
@@ -1074,7 +1345,7 @@ If you receive a system anomaly alert (such as high memory, CPU temperature warn
             }));
           }
         }
-        
+
         let processedText = text;
         if (payload.mentionFiles && Array.isArray(payload.mentionFiles) && payload.mentionFiles.length > 0) {
           let fileContexts = "\n\n=== ATTACHED FILES FOR CONTEXT ===\n";
@@ -1258,6 +1529,57 @@ If you receive a system anomaly alert (such as high memory, CPU temperature warn
       } catch (err) {
         ws.send(JSON.stringify({ type: 'git_history', commits: [] }));
       }
+    } else if (type === 'autocomplete') {
+      const { prefix } = payload;
+      const suggestions = workspaceTrie.searchPrefix(prefix || '', 10);
+      ws.send(JSON.stringify({
+        type: 'autocomplete_results',
+        prefix,
+        suggestions
+      }));
+    } else if (type === 'undo_last_edit') {
+      const rollback = await rollbackManager.rollbackLastCheckpoint();
+      ws.send(JSON.stringify({
+        type: 'tool_log',
+        text: rollback.message
+      }));
+      try {
+        const gitBranch = await getGitBranch();
+        const gitModifiedFiles = await getGitStatusFiles();
+        ws.send(JSON.stringify({ type: 'git_status', gitBranch, gitModifiedFiles }));
+      } catch {}
+    } else if (type === 'schedule_task') {
+      const { id, prompt, command, delaySeconds, isRecurring } = payload;
+      const task = cronScheduler.scheduleTask(
+        id || `task_${Date.now()}`,
+        prompt,
+        command,
+        delaySeconds || 60,
+        !!isRecurring,
+        (notif) => {
+          ws.send(JSON.stringify({
+            type: 'scheduled_task_notification',
+            data: notif
+          }));
+        }
+      );
+      ws.send(JSON.stringify({
+        type: 'tool_log',
+        text: `Task '${task.id}' scheduled successfully (Interval: ${delaySeconds}s, Recurring: ${!!isRecurring}).`
+      }));
+    } else if (type === 'list_scheduled_tasks') {
+      const tasks = cronScheduler.listTasks();
+      ws.send(JSON.stringify({
+        type: 'scheduled_tasks_list',
+        tasks
+      }));
+    } else if (type === 'cancel_scheduled_task') {
+      const { id } = payload;
+      const success = cronScheduler.cancelTask(id);
+      ws.send(JSON.stringify({
+        type: 'tool_log',
+        text: success ? `Task '${id}' cancelled.` : `Task '${id}' not found.`
+      }));
     } else if (type === 'git_checkout') {
       const { hash } = payload;
       try {
@@ -1723,7 +2045,20 @@ async function runAgentLoop(ws, agent, userText, settings) {
             const exitCode = event.result.isError ? 1 : 0;
             ws.send(JSON.stringify({ type: 'terminal_end', exitCode }));
           }
-          await appendSessionLog({ event: 'tool_result', tool: event.name, result: event.result });
+
+          // Active Application & Code Error Detection
+          const resultStr = typeof event.result?.content === 'string' ? event.result.content : JSON.stringify(event.result || {});
+          const detectedError = detectRuntimeError(resultStr);
+          if (detectedError) {
+            ws.send(JSON.stringify({
+              type: 'anomaly_alert',
+              anomalyType: 'code_error',
+              description: `Detected application error in ${event.name}: "${detectedError}"`,
+              data: { error: detectedError, tool: event.name }
+            }));
+          }
+
+          await appendSessionLog({ event: 'tool_result', tool: event.name, result: event.result, detectedError });
           break;
           
         case 'error':
@@ -1812,9 +2147,9 @@ async function querySystemTelemetry() {
   }
 
   try {
-    // 3. Systemd journalctl error log check
-    const { stdout } = await execAsync('journalctl -p 3 -xb -n 1 --no-pager');
-    const cleanLog = stdout.trim();
+    // 3. Systemd journalctl error log check (-q quiet mode suppresses system hints)
+    const { stdout } = await execAsync('journalctl -q -p 3 -xb -n 1 --no-pager');
+    const cleanLog = stdout.trim().split('\n').filter(line => !line.startsWith('Hint:') && !line.includes('level=INFO')).join('\n').trim();
     if (cleanLog && !cleanLog.includes('-- No entries --')) {
       metrics.journalError = cleanLog;
     }
@@ -1833,8 +2168,6 @@ function startTelemetryDaemon() {
     const metrics = await querySystemTelemetry();
     const now = Date.now();
     const isLoopActive = activeAborts.size > 0;
-
-    await appendSessionLog({ event: 'telemetry_snapshot', data: metrics });
 
     // Broadcast raw telemetry snapshot to all clients
     broadcast({
@@ -1855,35 +2188,6 @@ function startTelemetryDaemon() {
           type: 'anomaly_alert',
           anomalyType: 'ram',
           description: `Memory saturation is high: ${metrics.ramPercent}% of your RAM is in use.`,
-          data: metrics
-        }));
-      }
-
-      // 2. Temperature Alert
-      if (typeof metrics.cpuTemp === 'number') {
-        const baseThreshold = client.clientSettings?.tempAlertThreshold || 85;
-        const currentThreshold = isLoopActive ? 92 : baseThreshold;
-        
-        if (metrics.cpuTemp > currentThreshold && (now - client.lastAlerts.temp > 5 * 60 * 1000)) {
-          client.lastAlerts.temp = now;
-          client.send(JSON.stringify({
-            type: 'anomaly_alert',
-            anomalyType: 'temp',
-            description: isLoopActive 
-              ? `High inference temperature warning: Core temperature reached ${metrics.cpuTemp}°C (Threshold: 92°C).`
-              : `CPU temperature warning: Core temperature reached ${metrics.cpuTemp}°C (Threshold: ${baseThreshold}°C).`,
-            data: metrics
-          }));
-        }
-      }
-
-      // 3. Journal Alert
-      if (metrics.journalError && metrics.journalError !== client.lastAlerts.journal) {
-        client.lastAlerts.journal = metrics.journalError;
-        client.send(JSON.stringify({
-          type: 'anomaly_alert',
-          anomalyType: 'journal',
-          description: `New critical systemd service or system error logged.`,
           data: metrics
         }));
       }

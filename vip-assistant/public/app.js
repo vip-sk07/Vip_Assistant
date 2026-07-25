@@ -15,7 +15,7 @@ const state = {
     model: 'gemini-2.5-flash',
     apiKey: '',
     autoApprove: true,
-    tempAlertThreshold: 85,
+    tempAlertThreshold: 98,
     persona: 'default',
     customPrompt: ''
   },
@@ -118,6 +118,9 @@ function loadSettings() {
   if (saved) {
     try {
       state.settings = { ...state.settings, ...JSON.parse(saved) };
+      if (!state.settings.tempAlertThreshold || state.settings.tempAlertThreshold < 98) {
+        state.settings.tempAlertThreshold = 98;
+      }
     } catch (e) {
       console.error('Failed to parse settings', e);
     }
@@ -132,7 +135,7 @@ function loadSettings() {
   elements.settingsApiKey.value = state.settings.apiKey;
   elements.settingsAutoApprove.checked = state.settings.autoApprove;
   if (elements.settingsTempAlertThreshold) {
-    elements.settingsTempAlertThreshold.value = state.settings.tempAlertThreshold || 85;
+    elements.settingsTempAlertThreshold.value = state.settings.tempAlertThreshold || 98;
   }
   
   elements.settingsPersona.value = state.settings.persona || 'default';
@@ -154,7 +157,7 @@ function saveSettings() {
   state.settings.apiKey = elements.settingsApiKey.value;
   state.settings.autoApprove = elements.settingsAutoApprove.checked;
   if (elements.settingsTempAlertThreshold) {
-    state.settings.tempAlertThreshold = parseInt(elements.settingsTempAlertThreshold.value, 10) || 85;
+    state.settings.tempAlertThreshold = parseInt(elements.settingsTempAlertThreshold.value, 10) || 98;
   }
   
   state.settings.persona = elements.settingsPersona.value;
@@ -646,10 +649,10 @@ function setupEventListeners() {
     }
   });
   
-  // Prompt chips
-  document.querySelectorAll('.prompt-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      elements.messageInput.value = chip.getAttribute('data-prompt');
+  // Prompt cards & chips
+  document.querySelectorAll('.prompt-card, .prompt-chip').forEach(card => {
+    card.addEventListener('click', () => {
+      elements.messageInput.value = card.getAttribute('data-prompt');
       elements.messageInput.focus();
       elements.messageInput.dispatchEvent(new Event('input'));
     });
