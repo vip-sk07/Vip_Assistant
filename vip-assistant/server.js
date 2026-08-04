@@ -1,4 +1,6 @@
 import express from 'express';
+import { Agent } from 'undici';
+const insecureAgent = new Agent({ connect: { rejectUnauthorized: false } });
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import chokidar from 'chokidar';
@@ -29,6 +31,7 @@ import { TrieAutocomplete } from './trie-autocomplete.js';
 import { LRUVectorCache } from './lru-vector-cache.js';
 import { GitRollbackManager } from './git-rollback-manager.js';
 import { CronSchedulerEngine } from './cron-scheduler.js';
+import { loadMCPServers } from './mcp-client.js';
 
 import { 
   createDriveClient, 
@@ -264,6 +267,7 @@ async function getEmbedding(text, apiKey) {
       try {
         const response = await fetch('https://integrate.api.nvidia.com/v1/embeddings', {
           method: 'POST',
+          dispatcher: insecureAgent,
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${key}`
@@ -651,6 +655,24 @@ async function verifyCodeSyntax(filePath) {
   return { success: true };
 }
 
+const wrappedFileReadTool = {
+  ...FileReadTool,
+  async *execute(input, ctx) {
+    const abs = path.resolve(ctx.cwd, input.file_path);
+    if (abs.toLowerCase().endsWith('.pdf')) {
+      try {
+        const { stdout } = await execAsync(`pdftotext "${abs}" -`, { maxBuffer: 10 * 1024 * 1024 });
+        yield { content: stdout || "(empty PDF document)" };
+        return;
+      } catch (err) {
+        yield { content: `Failed to extract PDF text via pdftotext: ${err.message}`, isError: true };
+        return;
+      }
+    }
+    return yield* FileReadTool.execute(input, ctx);
+  }
+};
+
 const wrappedFileWriteTool = {
   ...FileWriteTool,
   async *execute(input, ctx) {
@@ -664,17 +686,15 @@ const wrappedFileWriteTool = {
     pushToUndoStack(abs, oldContent);
     await rollbackManager.createCheckpoint(`Pre-write: ${input.file_path}`);
     
-    for await (const res of FileWriteTool.execute(input, ctx)) {
-      const verify = await verifyCodeSyntax(abs);
-      if (!verify.success) {
-        yield {
-          ...res,
-          content: `${res.content || ''}\n\n⚠️ [Automated Code Verification Alert]: Syntax check failed for ${input.file_path}:\n${verify.error}\nPlease examine the syntax error and apply a self-correction fix.`
-        };
-      } else {
-        yield res;
-      }
+    const finalVal = yield* FileWriteTool.execute(input, ctx);
+    const verify = await verifyCodeSyntax(abs);
+    if (!verify.success) {
+      return {
+        ...finalVal,
+        content: `${finalVal?.content || ''}\n\n⚠️ [Automated Code Verification Alert]: Syntax check failed for ${input.file_path}:\n${verify.error}\nPlease examine the syntax error and apply a self-correction fix.`
+      };
     }
+    return finalVal;
   }
 };
 
@@ -691,17 +711,15 @@ const wrappedFileEditTool = {
     pushToUndoStack(abs, oldContent);
     await rollbackManager.createCheckpoint(`Pre-edit: ${input.file_path}`);
     
-    for await (const res of FileEditTool.execute(input, ctx)) {
-      const verify = await verifyCodeSyntax(abs);
-      if (!verify.success) {
-        yield {
-          ...res,
-          content: `${res.content || ''}\n\n⚠️ [Automated Code Verification Alert]: Syntax check failed for ${input.file_path}:\n${verify.error}\nPlease examine the syntax error and apply a self-correction fix.`
-        };
-      } else {
-        yield res;
-      }
+    const finalVal = yield* FileEditTool.execute(input, ctx);
+    const verify = await verifyCodeSyntax(abs);
+    if (!verify.success) {
+      return {
+        ...finalVal,
+        content: `${finalVal?.content || ''}\n\n⚠️ [Automated Code Verification Alert]: Syntax check failed for ${input.file_path}:\n${verify.error}\nPlease examine the syntax error and apply a self-correction fix.`
+      };
     }
+    return finalVal;
   }
 };
 
@@ -888,9 +906,15 @@ const customBashTool = {
       return { content: error.message || "Command failed", isError: true };
     }
 
+    const truncate = (str, maxLines = 1000) => {
+      const lines = str.trim().split('\n');
+      if (lines.length <= maxLines) return str.trim();
+      return `... (truncated ${lines.length - maxLines} lines) ...\n` + lines.slice(-maxLines).join('\n');
+    };
+
     const output = [
-      stdoutAccum.trim() ? stdoutAccum.trim() : null,
-      stderrAccum.trim() ? `<stderr>\n${stderrAccum.trim()}\n</stderr>` : null,
+      stdoutAccum.trim() ? truncate(stdoutAccum) : null,
+      stderrAccum.trim() ? `<stderr>\n${truncate(stderrAccum)}\n</stderr>` : null,
     ]
       .filter(Boolean)
       .join("\n");
@@ -978,12 +1002,47 @@ const SearchProjectContextTool = {
   async *execute(input, ctx) {
     const limit = input.limit || 5;
     const apiKey = process.env.GEMINI_API_KEY;
+
+    // Fallback filesystem search if query is a filename/path or vectorDb is empty
+    const cleanQuery = input.query.trim().replace(/^@/, '');
+    if (vectorDb.length === 0 || cleanQuery.includes('.') || cleanQuery.includes('_') || cleanQuery.includes('/')) {
+      try {
+        let searchDir = path.dirname(WORKSPACE_DIR);
+        try {
+          const match = WORKSPACE_DIR.match(/^(.*\/Academics)/i);
+          if (match) searchDir = match[1];
+        } catch (e) {}
+        const { stdout } = await execAsync(`find "${WORKSPACE_DIR}" "${searchDir}" -name "*${cleanQuery}*" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -n 5`);
+        const foundPaths = Array.from(new Set(stdout.trim().split('\n').filter(Boolean)));
+        if (foundPaths.length > 0) {
+          let directResults = `Found ${foundPaths.length} matching file(s) in local workspace / academic directory:\n\n`;
+          for (const fp of foundPaths) {
+            const rel = path.relative(parentDir, fp);
+            if (fp.toLowerCase().endsWith('.pdf')) {
+              try {
+                const { stdout: pdfText } = await execAsync(`pdftotext "${fp}" -`, { maxBuffer: 10 * 1024 * 1024 });
+                directResults += `File: ${rel}\n\`\`\`\n${pdfText.substring(0, 4000) || '(empty PDF)'}\n\`\`\`\n\n`;
+              } catch (e) {
+                directResults += `File: ${rel} (PDF read error: ${e.message})\n\n`;
+              }
+            } else {
+              try {
+                const txt = await fs.readFile(fp, 'utf8');
+                directResults += `File: ${rel}\n\`\`\`\n${txt.substring(0, 4000)}\n\`\`\`\n\n`;
+              } catch (e) {}
+            }
+          }
+          return { content: directResults, isError: false };
+        }
+      } catch (err) {}
+    }
+    
     if (!apiKey) {
-      return { content: "Gemini API key is not configured. Cannot perform vector embedding query.", isError: true };
+      return { content: "Gemini API key is not configured for vector search, but no direct matching files were found in workspace.", isError: true };
     }
     
     if (vectorDb.length === 0) {
-      return { content: "Codebase index is currently empty or still building. Please wait a moment.", isError: false };
+      return { content: "Codebase index is currently empty and no matching files were found in workspace.", isError: false };
     }
     
     try {
@@ -1117,25 +1176,33 @@ async function getOllamaModels() {
 
 // Fetch NVIDIA NIM Cloud models list
 async function getNvidiaModels(apiKey) {
+  const defaultNvidiaModels = [
+    "meta/llama-3.1-70b-instruct",
+    "nvidia/llama-3.1-nemotron-70b-instruct",
+    "deepseek-ai/deepseek-r1",
+    "mistralai/mixtral-8x22b-instruct-v0.1",
+    "google/gemma-2-27b-it"
+  ];
   try {
     const key = apiKey || process.env.NVIDIA_API_KEY;
-    if (!key) return [];
+    if (!key) return defaultNvidiaModels;
     const resp = await fetch('https://integrate.api.nvidia.com/v1/models', {
+      dispatcher: insecureAgent,
       headers: {
         'Authorization': `Bearer ${key}`
       }
     });
     if (resp.ok) {
       const data = await resp.json();
-      // Filter out non-chat models or expose all text-generation/chat models
-      return (data.data || [])
+      const fetched = (data.data || [])
         .map(m => m.id)
-        .filter(id => id.includes('llama') || id.includes('mixtral') || id.includes('gemma') || id.includes('phi') || id.includes('nemotron') || id.includes('mistral'));
+        .filter(id => id.includes('llama') || id.includes('mixtral') || id.includes('gemma') || id.includes('phi') || id.includes('nemotron') || id.includes('mistral') || id.includes('deepseek') || id.includes('qwen'));
+      if (fetched.length > 0) return fetched;
     }
   } catch (e) {
     console.error('Failed to fetch NVIDIA Cloud models:', e.message);
   }
-  return [];
+  return defaultNvidiaModels;
 }
 
 async function runFolderPicker() {
@@ -1239,6 +1306,29 @@ wss.on('connection', (ws) => {
 
     if (type === 'update_settings') {
       ws.clientSettings = { ...ws.clientSettings, ...payload.settings };
+      if (payload.settings?.apiKey) {
+        const key = payload.settings.apiKey.trim();
+        const prov = payload.settings.provider;
+        if (prov === 'nvidia') {
+          process.env.NVIDIA_API_KEY = key;
+        } else if (prov === 'gemini') {
+          process.env.GEMINI_API_KEY = key;
+        } else if (prov === 'anthropic') {
+          process.env.ANTHROPIC_API_KEY = key;
+        }
+        try {
+          const envPath = path.join(process.cwd(), '.env');
+          let envContent = await fs.readFile(envPath, 'utf8').catch(() => '');
+          const varName = prov === 'nvidia' ? 'NVIDIA_API_KEY' : (prov === 'gemini' ? 'GEMINI_API_KEY' : 'ANTHROPIC_API_KEY');
+          if (envContent.includes(`${varName}=`)) {
+            envContent = envContent.replace(new RegExp(`${varName}=.*`), `${varName}=${key}`);
+          } else {
+            envContent += `\n${varName}=${key}\n`;
+          }
+          await fs.writeFile(envPath, envContent, 'utf8');
+          console.log(`[ENV] ${varName} updated in .env`);
+        } catch (e) {}
+      }
       return;
     }
 
@@ -1292,15 +1382,35 @@ If you receive a system anomaly alert (such as high memory, CPU temperature warn
 3. Present the diagnostic findings clearly, and propose/execute the exact corrective commands (e.g. \`systemctl restart <service>\` or terminating a runaway background process) to recover system stability.
 `;
 
-        const ollamaReasoningPrompt = targetProvider === 'ollama' ? `
-=== HIGH-PERFORMANCE LOCAL REASONING & CHAIN-OF-THOUGHT ===
-You are an expert Autonomous AI Pair Programmer powered by state-of-the-art reasoning principles.
+        const coreAgentPrompt = `
+=== HIGH-PERFORMANCE REASONING & CHAIN-OF-THOUGHT ===
+You are an expert Autonomous AI Pair Programmer equipped with direct terminal execution and file manipulation tools.
 When addressing coding tasks, bug fixes, or architecture design:
 1. Always formulate a clear step-by-step reasoning plan inside a <thinking> ... </thinking> block before performing edits or generating final code responses.
 2. Carefully inspect existing code structure, imports, and method signatures using tool calls before modifying files.
 3. Keep code modifications concise, precise, and fully typed without removing existing docstrings or unrelated logic.
 4. When writing code, ensure valid syntax. If an automated verification alert flags a syntax error, examine the compiler output and apply a self-correction fix immediately.
-` : '';
+5. You HAVE FULL ACCESS to execute terminal commands, run scripts, compile code, and read/write/edit/create files on the local filesystem. When the user asks you to write code, create files, or execute a script, NEVER say "As an AI I cannot run code". ALWAYS perform the requested file write or terminal operation!
+6. If your model format requires text-based tool execution, output file creations in XML:
+<writing>
+{
+  "file_path": "path/to/filename.ext",
+  "content": "full code content"
+}
+</writing>
+And output bash commands in:
+<bash>
+{
+  "command": "terminal command"
+}
+</bash>
+`;
+
+        const workspaceFirstPrompt = `
+=== LOCAL WORKSPACE VS GOOGLE DRIVE DIRECTIVE ===
+1. Local Workspace Priority: Whenever the user mentions a local file, @filename, or filename like @ML_E3_1784890244672.pdf or asks to read/inspect a file, ALWAYS use \`FileRead\` (or \`SearchProjectContext\`) to read the file from the LOCAL WORKSPACE first.
+2. Google Drive Scoping: Do NOT call \`SearchGoogleDriveLibrary\` unless the user explicitly mentions "Google Drive", "drive", "cloud storage", or when local workspace search finds no results.
+`;
 
         const targetSystemPrompt = resolvePersonaPrompt(settings.persona, settings.customPrompt);
 
@@ -1308,27 +1418,66 @@ When addressing coding tasks, bug fixes, or architecture design:
         if (!agentInstance || currentModel !== targetModel || currentPermissionMode !== targetPermissionMode || currentProvider !== targetProvider || currentSystemPrompt !== targetSystemPrompt || currentApiKey !== targetApiKey) {
           ws.send(JSON.stringify({ type: 'tool_log', text: `Initializing Agent Engine (${targetModel})...` }));
           try {
+            const toolWriteAlias = { ...wrappedFileWriteTool, name: "Write" };
+            const toolReadAlias = { ...wrappedFileReadTool, name: "Read" };
+            const toolEditAlias = { ...wrappedFileEditTool, name: "Edit" };
+
             const agentTools = targetProvider === 'ollama'
-              ? [customBashTool, SearchGoogleDriveLibraryTool, SearchProjectContextTool, FileReadTool, wrappedFileWriteTool, wrappedFileEditTool]
+              ? [
+                  customBashTool,
+                  SearchGoogleDriveLibraryTool,
+                  SearchProjectContextTool,
+                  wrappedFileReadTool,
+                  wrappedFileWriteTool,
+                  wrappedFileEditTool,
+                  toolReadAlias,
+                  toolWriteAlias,
+                  toolEditAlias
+                ]
               : [
                   customBashTool,
                   GetSystemLogsTool,
                   SearchProjectContextTool,
                   SearchGoogleDriveLibraryTool,
-                  FileReadTool,
+                  wrappedFileReadTool,
                   wrappedFileWriteTool,
                   wrappedFileEditTool,
+                  toolReadAlias,
+                  toolWriteAlias,
+                  toolEditAlias,
                   GlobTool,
                   GrepTool,
                   WebSearchTool
                 ];
+                
+            // Load custom markdown skills from skills/ folder
+            let customSkillsPrompt = "";
+            try {
+              const skillsDir = path.join(WORKSPACE_DIR, 'skills');
+              await fs.mkdir(skillsDir, { recursive: true });
+              const files = await fs.readdir(skillsDir);
+              for (const file of files) {
+                if (file.endsWith('.md')) {
+                  const skillContent = await fs.readFile(path.join(skillsDir, file), 'utf8');
+                  customSkillsPrompt += `\n\n=== CUSTOM AGENT SKILL: ${file} ===\n${skillContent}\n`;
+                  console.log(`[Skills Engine] Loaded skill: ${file}`);
+                }
+              }
+            } catch (err) {
+              console.warn("[Skills Engine] Failed to load custom skills:", err.message);
+            }
+
+            const mcpTools = await loadMCPServers(WORKSPACE_DIR);
+            if (mcpTools && mcpTools.length > 0) {
+              agentTools.push(...mcpTools);
+            }
 
             agentInstance = await createAgent({
               cwd: WORKSPACE_DIR,
               model: targetModel,
               permissionMode: targetPermissionMode,
               systemPrompt: undefined,
-              appendSystemPrompt: `${targetSystemPrompt ? targetSystemPrompt : ''}\n\n${ollamaReasoningPrompt}\n\n${systemRecoveryPrompt}`,
+              appendSystemPrompt: `${targetSystemPrompt ? targetSystemPrompt : ''}\n\n${workspaceFirstPrompt}\n\n${coreAgentPrompt}\n\n${systemRecoveryPrompt}\n\n${customSkillsPrompt}`,
               disableBuiltinTools: true,
               tools: agentTools
             });
@@ -1347,21 +1496,92 @@ When addressing coding tasks, bug fixes, or architecture design:
         }
 
         let processedText = text;
-        if (payload.mentionFiles && Array.isArray(payload.mentionFiles) && payload.mentionFiles.length > 0) {
-          let fileContexts = "\n\n=== ATTACHED FILES FOR CONTEXT ===\n";
-          for (const file of payload.mentionFiles) {
+
+        const userMessageBlocks = [];
+
+        if (payload.attachments && payload.attachments.length > 0) {
+          const uploadDir = path.join(WORKSPACE_DIR, '.vip_assistant_uploads');
+          await fs.mkdir(uploadDir, { recursive: true });
+          
+          for (const att of payload.attachments) {
             try {
-              const content = await fs.readFile(path.join(WORKSPACE_DIR, file), 'utf8');
-              fileContexts += `File: ${file}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+              const base64Data = att.data.replace(/^data:.*?;base64,/, "");
+              const filePath = path.join(uploadDir, att.name);
+              await fs.writeFile(filePath, base64Data, 'base64');
+              
+              payload.mentionFiles = payload.mentionFiles || [];
+              payload.mentionFiles.push(path.relative(WORKSPACE_DIR, filePath));
+
+              if (att.data && att.data.startsWith('data:image/')) {
+                const mimeType = att.data.match(/^data:(image\/.*?);base64,/)?.[1] || 'image/png';
+                userMessageBlocks.push({
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: mimeType,
+                    data: base64Data
+                  }
+                });
+              }
             } catch (err) {
-              console.warn(`Failed to read mention file: ${file}`, err.message);
+              console.error('Failed to save attachment:', att.name, err);
+            }
+          }
+        }
+
+        const textMentionTokens = (text.match(/@[\w\.-]+/g) || []).map(t => t.replace(/^@/, ''));
+        const combinedMentions = Array.from(new Set([
+          ...(payload.mentionFiles || []),
+          ...textMentionTokens
+        ]));
+
+        if (combinedMentions.length > 0) {
+          let fileContexts = "\n\n=== ATTACHED LOCAL WORKSPACE FILES FOR CONTEXT ===\n";
+          for (const file of combinedMentions) {
+            try {
+              let targetAbs = path.join(WORKSPACE_DIR, file);
+              let fileExists = await fs.access(targetAbs).then(() => true).catch(() => false);
+              
+              // If not found in current WORKSPACE_DIR, search parent academic directory
+              if (!fileExists) {
+                let searchDir = path.dirname(WORKSPACE_DIR);
+                try {
+                  const match = WORKSPACE_DIR.match(/^(.*\/Academics)/i);
+                  if (match) searchDir = match[1];
+                } catch (e) {}
+                const { stdout } = await execAsync(`find "${WORKSPACE_DIR}" "${searchDir}" -iname "*${file}*" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -n 1`);
+                const matchedPath = stdout.trim();
+                if (matchedPath) {
+                  targetAbs = matchedPath;
+                  fileExists = true;
+                }
+              }
+              
+              if (fileExists) {
+                const ext = path.extname(targetAbs).toLowerCase();
+                if (['.png', '.jpg', '.jpeg', '.gif', '.zip', '.gz', '.tar', '.mp4'].includes(ext)) {
+                  fileContexts += `File: ${file} (Path: ${targetAbs})\n[Binary/Image file attached but text content not extracted]\n\n`;
+                } else if (ext === '.pdf') {
+                  const { stdout } = await execAsync(`pdftotext "${targetAbs}" -`, { maxBuffer: 10 * 1024 * 1024 });
+                  fileContexts += `File: ${file} (Path: ${targetAbs})\n\`\`\`\n${stdout || '(empty PDF)'}\n\`\`\`\n\n`;
+                } else {
+                  const content = await fs.readFile(targetAbs, 'utf8');
+                  fileContexts += `File: ${file} (Path: ${targetAbs})\n\`\`\`\n${content}\n\`\`\`\n\n`;
+                }
+              } else {
+                console.warn(`Mention file not found in workspace or parent dir: ${file}`);
+              }
+            } catch (err) {
+              console.warn(`Failed to process mention file: ${file}`, err.message);
             }
           }
           processedText += fileContexts;
         }
         
+        userMessageBlocks.unshift({ type: "text", text: processedText });
+        
         // Start agent query loop
-        runAgentLoop(ws, agentInstance, processedText, settings);
+        runAgentLoop(ws, agentInstance, userMessageBlocks, settings);
       } catch (err) {
         ws.send(JSON.stringify({ type: 'error', message: 'Failed to run agent loop: ' + err.message }));
       }
@@ -2036,6 +2256,7 @@ async function runAgentLoop(ws, agent, userText, settings) {
             toolArgs = toolUseBlock ? toolUseBlock.input : {};
           }
           await appendSessionLog({ event: 'tool_use_start', tool: event.name, args: toolArgs });
+          ws.send(JSON.stringify({ type: 'tool_status', name: event.name, status: 'running', args: toolArgs }));
           break;
           
         case 'tool_result':
@@ -2045,6 +2266,7 @@ async function runAgentLoop(ws, agent, userText, settings) {
             const exitCode = event.result.isError ? 1 : 0;
             ws.send(JSON.stringify({ type: 'terminal_end', exitCode }));
           }
+          ws.send(JSON.stringify({ type: 'tool_status', name: event.name, status: 'completed', result: event.result }));
 
           // Active Application & Code Error Detection
           const resultStr = typeof event.result?.content === 'string' ? event.result.content : JSON.stringify(event.result || {});
@@ -2067,6 +2289,154 @@ async function runAgentLoop(ws, agent, userText, settings) {
           break;
       }
     }
+
+    // --- FALLBACK XML PARSER FOR LOCAL MODELS ---
+    let generatedText = "";
+    const lastMsg = agent.history[agent.history.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant') {
+      if (Array.isArray(lastMsg.content)) {
+        generatedText = lastMsg.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+      } else if (typeof lastMsg.content === 'string') {
+        generatedText = lastMsg.content;
+      }
+    }
+    
+    function tryParseToolPayload(rawStr) {
+      let str = rawStr.trim();
+      if (!str) return null;
+      if (!str.startsWith('{') && str.includes('"name"')) {
+        str = '{' + str + '}';
+      }
+      if (str.includes('{')) {
+        try {
+          const jsonStr = str.replace(/^[^{]*{/, '{').replace(/}[^}]*$/, '}');
+          return JSON.parse(jsonStr);
+        } catch (e) {}
+      }
+      return null;
+    }
+
+    const writingRegex = /<\s*writing\s*>([\s\S]*?)<\s*\/\s*writing\s*>/gi;
+    const bashRegex = /<\s*bash\s*>([\s\S]*?)<\s*\/\s*bash\s*>/gi;
+    const jsonTagRegex = /<\s*json\s*>([\s\S]*?)<\s*\/\s*json\s*>/gi;
+    
+    let fallbackTriggered = false;
+    let newContext = "";
+    
+    let match;
+
+    // Parse <json>...</json> blocks
+    while ((match = jsonTagRegex.exec(generatedText)) !== null) {
+      try {
+        const data = tryParseToolPayload(match[1]);
+        if (data) {
+          if (data.name === 'Write' || data.name === 'FileWrite' || data.file_path) {
+            const filePath = data.arguments ? data.arguments.file_path : data.file_path;
+            const content = data.arguments ? data.arguments.content : data.content;
+            if (filePath && content !== undefined) {
+              const abs = resolveSafePath(filePath);
+              await fs.mkdir(path.dirname(abs), { recursive: true });
+              await fs.writeFile(abs, content);
+              newContext += `[System: Successfully wrote file ${filePath}]\n`;
+              fallbackTriggered = true;
+              ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Wrote file ${filePath}` }));
+            }
+          } else if (data.name === 'Bash' || data.command) {
+            const cmd = data.arguments ? data.arguments.command : data.command;
+            if (cmd) {
+              const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
+              newContext += `[System: Command executed: ${cmd}]\nStdout: ${stdout}\nStderr: ${stderr}\n`;
+              fallbackTriggered = true;
+              ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
+            }
+          }
+        }
+      } catch (err) {
+        newContext += `[System: Failed to parse/execute <json> block: ${err.message}]\n`;
+        fallbackTriggered = true;
+      }
+    }
+
+    // Parse <writing>...</writing> blocks
+    while ((match = writingRegex.exec(generatedText)) !== null) {
+      try {
+        const data = tryParseToolPayload(match[1]);
+        if (data && (data.file_path || data.arguments?.file_path)) {
+          const filePath = data.arguments ? data.arguments.file_path : data.file_path;
+          const content = data.arguments ? data.arguments.content : data.content;
+          if (filePath && content !== undefined) {
+            const abs = resolveSafePath(filePath);
+            await fs.mkdir(path.dirname(abs), { recursive: true });
+            await fs.writeFile(abs, content);
+            newContext += `[System: Successfully wrote file ${filePath}]\n`;
+            fallbackTriggered = true;
+            ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Wrote file ${filePath}` }));
+          }
+        }
+      } catch (err) {
+        newContext += `[System: Failed to parse or write file from <writing> block: ${err.message}]\n`;
+        fallbackTriggered = true;
+      }
+    }
+    
+    // Parse <bash>...</bash> blocks (JSON or raw command)
+    while ((match = bashRegex.exec(generatedText)) !== null) {
+      try {
+        let cmd = null;
+        const data = tryParseToolPayload(match[1]);
+        if (data) {
+          cmd = data.arguments ? data.arguments.command : data.command;
+        } else {
+          cmd = match[1].trim();
+        }
+        if (cmd && cmd.length > 0) {
+          const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
+          newContext += `[System: Command executed: ${cmd}]\nStdout: ${stdout}\nStderr: ${stderr}\n`;
+          fallbackTriggered = true;
+          ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
+        }
+      } catch (err) {
+        newContext += `[System: Failed to parse or execute command from <bash> block: ${err.message}]\n`;
+        fallbackTriggered = true;
+      }
+    }
+    
+    // Parse markdown ```json or ```bash code blocks
+    const codeBlockRegex = /```(?:json|bash|)\s*([\s\S]*?)```/gi;
+    while ((match = codeBlockRegex.exec(generatedText)) !== null) {
+      try {
+        const data = tryParseToolPayload(match[1]);
+        if (data) {
+          if (data.name === 'Write' || data.name === 'FileWrite') {
+            const args = data.arguments || {};
+            if (args.file_path && args.content) {
+              const abs = resolveSafePath(args.file_path);
+              await fs.mkdir(path.dirname(abs), { recursive: true });
+              await fs.writeFile(abs, args.content);
+              newContext += `[System: Successfully wrote file ${args.file_path}]\n`;
+              fallbackTriggered = true;
+              ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Wrote file ${args.file_path}` }));
+            }
+          } else if (data.name === 'Bash') {
+            const args = data.arguments || {};
+            const cmd = args.command;
+            if (cmd) {
+              const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
+              newContext += `[System: Command executed: ${cmd}]\nStdout: ${stdout}\nStderr: ${stderr}\n`;
+              fallbackTriggered = true;
+              ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
+            }
+          }
+        }
+      } catch (err) {
+        // Not a JSON block, skip
+      }
+    }
+    
+    if (fallbackTriggered) {
+      return runAgentLoop(ws, agent, `[Fallback Tool Results]\n${newContext}`, settings);
+    }
+    // --- END FALLBACK ---
 
     // Map history to client structure
     const clientHistory = mapHistoryToClient(agent.history);

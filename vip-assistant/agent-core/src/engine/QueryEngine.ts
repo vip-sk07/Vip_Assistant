@@ -89,13 +89,13 @@ export class QueryEngine {
    * Yields QueryEvents for incremental rendering.
    */
   async *submitMessage(
-    userContent: string,
+    userContent: string | ContentBlock[],
     signal: AbortSignal,
   ): AsyncGenerator<QueryEvent> {
     // 1. Append the user message
     this.messages.push({
       role: "user",
-      content: [{ type: "text", text: userContent }],
+      content: typeof userContent === "string" ? [{ type: "text", text: userContent }] : userContent,
       metadata: { timestamp: Date.now() },
     });
 

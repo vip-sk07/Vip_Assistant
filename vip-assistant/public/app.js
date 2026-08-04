@@ -8,6 +8,7 @@ let chatHistory = JSON.parse(localStorage.getItem('vip_chat_history')) || [];
 let isGenerating = false;
 let currentToolApprovalPayload = null;
 let editorCMInstance = null;
+let pendingAttachments = [];
 
 const state = {
   settings: {
@@ -34,11 +35,16 @@ const elements = {
   messageList: document.getElementById('message-list'),
   messageInput: document.getElementById('message-input'),
   sendMessageBtn: document.getElementById('send-message-btn'),
-  statusDot: document.getElementById('status-dot'),
+  statusAvatar: document.getElementById('status-avatar'),
   statusText: document.getElementById('status-text'),
   activeModelName: document.getElementById('active-model-name'),
   workspacePath: document.getElementById('workspace-path'),
   fileTree: document.getElementById('file-tree'),
+  
+  // Attachments
+  attachFileBtn: document.getElementById('attach-file-btn'),
+  hiddenFileInput: document.getElementById('hidden-file-input'),
+  fileAttachmentChips: document.getElementById('file-attachment-chips'),
   
   // Settings
   settingsModal: document.getElementById('settings-modal'),
@@ -318,6 +324,10 @@ function handleServerMessage(payload) {
       
     case 'tool_log':
       addActivityLog(payload.text, 'tool');
+      break;
+      
+    case 'tool_status':
+      handleToolStatusChange(payload);
       break;
       
     case 'terminal_start':
@@ -747,9 +757,14 @@ function sendMessage() {
   ws.send(JSON.stringify({
     type: 'user_message',
     text,
+    attachments: pendingAttachments,
     history: chatHistory,
     settings: state.settings
   }));
+  
+  // Clear attachments
+  pendingAttachments = [];
+  renderAttachmentChips();
 }
 
 // Add user message card to layout
@@ -896,10 +911,58 @@ function addActivityLog(text, type = 'system') {
   elements.activityLogFeed.scrollTop = elements.activityLogFeed.scrollHeight;
 }
 
-// Update Status Dot & Text
+// Update Status Avatar & Text
 function updateStatus(stateClass, text) {
-  elements.statusDot.className = `status-dot ${stateClass}`;
+  if (elements.statusAvatar) {
+    elements.statusAvatar.className = `status-avatar ${stateClass}`;
+  }
   elements.statusText.textContent = text;
+}
+
+function handleToolStatusChange(payload) {
+  const { name, status, args, result } = payload;
+  const avatar = elements.statusAvatar;
+  if (!avatar) return;
+
+  if (status === 'running') {
+    if (name === 'Read' || name === 'Write' || name === 'Edit' || name === 'FileWrite' || name === 'FileEdit' || name === 'FileRead') {
+      avatar.className = 'status-avatar file-access';
+      updateStatus('file-access', `Accessing file ${args.TargetFile || args.filePath || ''}...`);
+      highlightPanel('workspace', true);
+    } else if (name === 'Bash') {
+      avatar.className = 'status-avatar executing';
+      updateStatus('executing', `Running bash command...`);
+      highlightPanel('terminal', true);
+    } else if (name === 'WebSearch' || name === 'SearchProjectContext' || name === 'SearchGoogleDriveLibrary' || name === 'Glob' || name === 'Grep') {
+      avatar.className = 'status-avatar searching';
+      updateStatus('searching', `Scanning workspace context...`);
+      highlightPanel('workspace', true);
+    } else {
+      avatar.className = 'status-avatar thinking';
+      updateStatus('thinking', `Invoking tool ${name}...`);
+    }
+  } else if (status === 'completed') {
+    avatar.className = 'status-avatar online';
+    updateStatus('online', 'Connected');
+    highlightPanel('workspace', false);
+    highlightPanel('terminal', false);
+  }
+}
+
+function highlightPanel(panelType, isHighlighted) {
+  if (panelType === 'workspace') {
+    const sidebar = document.querySelector('.sidebar') || document.querySelector('#sidebar-panel') || document.querySelector('.file-explorer-container');
+    if (sidebar) {
+      if (isHighlighted) sidebar.classList.add('panel-focus-glow-workspace');
+      else sidebar.classList.remove('panel-focus-glow-workspace');
+    }
+  } else if (panelType === 'terminal') {
+    const term = document.querySelector('.terminal-container') || document.querySelector('#terminal-panel') || document.getElementById('terminal-stream-overlay');
+    if (term) {
+      if (isHighlighted) term.classList.add('panel-focus-glow-terminal');
+      else term.classList.remove('panel-focus-glow-terminal');
+    }
+  }
 }
 
 // UI State Toggles
@@ -930,15 +993,23 @@ function updateModelDropdownOptions() {
       state.ollamaModels.forEach(modelName => {
         const opt = document.createElement('option');
         opt.value = modelName;
+        
+        let typeSuffix = ' (Local Chat)';
+        if (modelName.includes('vl')) {
+          typeSuffix = ' (Local Vision)';
+        } else if (modelName.includes('coder')) {
+          typeSuffix = ' (Local Code)';
+        }
+        
         const hasTools = checkOllamaToolSupport(modelName);
-        opt.textContent = modelName + (hasTools ? ' (Supports Tools)' : ' (No Tool Support - Chat Only)');
+        opt.textContent = modelName + typeSuffix + (hasTools ? ' [Tools]' : ' [Chat-Only]');
         opt.className = 'ollama-dynamic-option';
         elements.settingsModel.appendChild(opt);
       });
     } else {
       const opt = document.createElement('option');
       opt.value = 'llama3:latest';
-      opt.textContent = 'llama3:latest (No Tool Support - Chat Only)';
+      opt.textContent = 'llama3:latest (Local Chat) [Chat-Only]';
       opt.className = 'ollama-dynamic-option';
       elements.settingsModel.appendChild(opt);
     }
@@ -1042,13 +1113,21 @@ function updateModelDropdownOptions() {
         state.ollamaModels.forEach(modelName => {
           const opt = document.createElement('option');
           opt.value = modelName;
-          opt.textContent = modelName;
+          
+          let typeSuffix = ' (Local Chat)';
+          if (modelName.includes('vl')) {
+            typeSuffix = ' (Local Vision)';
+          } else if (modelName.includes('coder')) {
+            typeSuffix = ' (Local Code)';
+          }
+          
+          opt.textContent = modelName + typeSuffix;
           ollamaGroup.appendChild(opt);
         });
       } else {
         const opt = document.createElement('option');
         opt.value = 'llama3:latest';
-        opt.textContent = 'llama3:latest';
+        opt.textContent = 'llama3:latest (Local Chat)';
         ollamaGroup.appendChild(opt);
       }
     }
@@ -1638,3 +1717,89 @@ function setupWorkspaceResizer() {
     }
   });
 }
+
+// ==========================================================================
+// File Attachment Logic
+// ==========================================================================
+
+function handleFiles(files) {
+  Array.from(files).forEach(file => {
+    // Limit to generic readable text-like files or PDFs
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      pendingAttachments.push({
+        name: file.name,
+        data: e.target.result // base64 payload
+      });
+      renderAttachmentChips();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function removeAttachment(index) {
+  pendingAttachments.splice(index, 1);
+  renderAttachmentChips();
+}
+
+function renderAttachmentChips() {
+  elements.fileAttachmentChips.innerHTML = '';
+  pendingAttachments.forEach((att, index) => {
+    const chip = document.createElement('div');
+    chip.className = 'attachment-chip';
+    chip.innerHTML = `
+      <i class="bx bx-file"></i> ${att.name}
+      <button class="chip-remove-btn" onclick="removeAttachment(${index})">
+        <i class="bx bx-x"></i>
+      </button>
+    `;
+    elements.fileAttachmentChips.appendChild(chip);
+  });
+  
+  if (pendingAttachments.length > 0) {
+    elements.sendMessageBtn.disabled = false;
+  } else if (!elements.messageInput.value.trim()) {
+    elements.sendMessageBtn.disabled = true;
+  }
+}
+
+// Event Listeners for File Attachments
+elements.attachFileBtn.addEventListener('click', () => {
+  elements.hiddenFileInput.click();
+});
+
+elements.hiddenFileInput.addEventListener('change', (e) => {
+  if (e.target.files.length > 0) {
+    handleFiles(e.target.files);
+    elements.hiddenFileInput.value = ''; // reset
+  }
+});
+
+// Paste Event
+elements.messageInput.addEventListener('paste', (e) => {
+  if (e.clipboardData && e.clipboardData.files.length > 0) {
+    e.preventDefault();
+    handleFiles(e.clipboardData.files);
+  }
+});
+
+// Drag and Drop
+const chatInputContainer = document.querySelector('.input-container');
+
+chatInputContainer.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  chatInputContainer.classList.add('drag-over');
+});
+
+chatInputContainer.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  chatInputContainer.classList.remove('drag-over');
+});
+
+chatInputContainer.addEventListener('drop', (e) => {
+  e.preventDefault();
+  chatInputContainer.classList.remove('drag-over');
+  if (e.dataTransfer.files.length > 0) {
+    handleFiles(e.dataTransfer.files);
+  }
+});

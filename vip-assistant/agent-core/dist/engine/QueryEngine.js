@@ -67,7 +67,7 @@ export class QueryEngine {
         // 1. Append the user message
         this.messages.push({
             role: "user",
-            content: [{ type: "text", text: userContent }],
+            content: typeof userContent === "string" ? [{ type: "text", text: userContent }] : userContent,
             metadata: { timestamp: Date.now() },
         });
         yield* this.runLoop(signal);

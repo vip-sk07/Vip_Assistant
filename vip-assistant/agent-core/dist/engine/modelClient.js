@@ -243,7 +243,8 @@ async function* callModelOllama(params) {
         model: actualModel,
         messages: mappedMessages,
         stream: true,
-        stream_options: { include_usage: true }
+        stream_options: { include_usage: true },
+        keep_alive: process.env["OLLAMA_KEEP_ALIVE"] || "1m"
     };
     if (mappedTools) {
         body.tools = mappedTools;
@@ -264,17 +265,19 @@ async function* callModelOllama(params) {
         if (text.includes("does not support tool") && body.tools) {
             const fallbackBody = { ...body };
             delete fallbackBody.tools;
-            // Inject tool disable warning to prevent model hallucinating tool operations
+            // Inject text-based tool fallback instructions for non-native tool calling models
             if (fallbackBody.messages) {
-                const warning = "\n\n[SYSTEM NOTICE: This model does not support tool calling. You currently do NOT have access to tools (like Glob, Read, Write, Edit, Bash). Do NOT hallucinate search results, files, folders, or terminal outputs. If the user asks you to perform tool-based actions, politely explain that your model is running in chat-only mode without tool access, and suggest they switch to qwen2.5-coder:7b in the settings.]";
+                const fallbackDirective = "\n\n[SYSTEM DIRECTIVE: You are operating in text-based tool calling mode. To write/create a file or run terminal commands, output your tool actions in XML blocks:\n" +
+                    "To create a file:\n<writing>\n{\n  \"file_path\": \"filename.py\",\n  \"content\": \"your file content here\"\n}\n</writing>\n\n" +
+                    "To execute a terminal command:\n<bash>\n{\n  \"command\": \"your command here\"\n}\n</bash>]";
                 const systemMsg = fallbackBody.messages.find(m => m.role === "system");
                 if (systemMsg) {
-                    systemMsg.content += warning;
+                    systemMsg.content += fallbackDirective;
                 }
                 else {
                     fallbackBody.messages.unshift({
                         role: "system",
-                        content: "You are an AI assistant." + warning
+                        content: "You are an AI assistant." + fallbackDirective
                     });
                 }
             }
@@ -551,6 +554,7 @@ async function* parseOllamaSSEStream(body, messages, tools) {
                                     index: 0,
                                     delta: jsonBuffer
                                 };
+                                accumulatedText += jsonBuffer;
                                 jsonBuffer = "";
                             }
                         }
@@ -612,6 +616,7 @@ async function* parseOllamaSSEStream(body, messages, tools) {
                 index: 0,
                 delta: jsonBuffer
             };
+            accumulatedText += jsonBuffer;
         }
         if (finalUsage.input_tokens === 0) {
             finalUsage.input_tokens = Math.ceil(JSON.stringify(messages).length / 4);
@@ -655,6 +660,30 @@ async function* parseOllamaSSEStream(body, messages, tools) {
         reader.releaseLock();
     }
 }
+function mapUserContent(content) {
+    const hasImages = content.some(b => b.type === "image");
+    if (!hasImages) {
+        return content.map(b => {
+            if (b.type === "text")
+                return b.text;
+            return "";
+        }).join("\n");
+    }
+    return content.map(b => {
+        if (b.type === "text") {
+            return { type: "text", text: b.text };
+        }
+        if (b.type === "image") {
+            return {
+                type: "image_url",
+                image_url: {
+                    url: `data:${b.source.media_type};base64,${b.source.data}`
+                }
+            };
+        }
+        return null;
+    }).filter(Boolean);
+}
 function mapMessagesForOllama(system, messages) {
     const result = [];
     if (system) {
@@ -687,7 +716,7 @@ function mapMessagesForOllama(system, messages) {
             else {
                 result.push({
                     role: "user",
-                    content: getMessageText(msg)
+                    content: mapUserContent(msg.content)
                 });
             }
         }

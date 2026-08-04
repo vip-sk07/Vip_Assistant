@@ -155,7 +155,10 @@
             </div>
             <span class="separator">|</span>
             <div class="status-indicator">
-              <span id="status-dot" class="status-dot offline"></span>
+              <div id="status-avatar" class="status-avatar offline">
+                <div class="avatar-ring"></div>
+                <div class="avatar-core"><i class="bx bxs-bot"></i></div>
+              </div>
               <span id="status-text">Disconnected</span>
             </div>
             <span class="separator">|</span>
@@ -249,10 +252,15 @@
         <!-- Input Panel -->
         <footer id="chat-input-panel">
           <div class="input-container">
+            <div id="file-attachment-chips" class="attachment-chips-container"></div>
             <div class="input-glow-border"></div>
             <textarea id="message-input" placeholder="Ask anything, @ to mention files, / for workflows..." rows="1"></textarea>
             <div class="input-actions">
               <div class="left-actions">
+                <button id="attach-file-btn" class="quick-toggle-btn" title="Attach File">
+                  <i class="bx bx-paperclip"></i> Attach
+                </button>
+                <input type="file" id="hidden-file-input" multiple style="display: none;">
                 <button id="toggle-approve-quick" class="quick-toggle-btn active" title="Toggle Auto-Approve Commands">
                   <i class="bx bx-shield-alt-2"></i> Auto-Approve: <span id="quick-approve-status">ON</span>
                 </button>
