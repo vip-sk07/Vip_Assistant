@@ -14,12 +14,11 @@
     "sourceMap": true,
     "outDir": "./dist",
     "rootDir": ".",
-    "baseUrl": ".",
+    "rootDir": ".",
     "paths": {
       "src/*": ["./src/*"],
       "bun:bundle": ["./src/types/bun-bundle.d.ts"]
     },
-    "types": ["bun-types"],
     "lib": ["ESNext"],
     "allowImportingTsExtensions": true,
     "noEmit": true
