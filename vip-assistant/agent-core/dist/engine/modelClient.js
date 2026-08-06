@@ -267,9 +267,9 @@ async function* callModelOllama(params) {
             delete fallbackBody.tools;
             // Inject text-based tool fallback instructions for non-native tool calling models
             if (fallbackBody.messages) {
-                const fallbackDirective = "\n\n[SYSTEM DIRECTIVE: You are operating in text-based tool calling mode. To write/create a file or run terminal commands, output your tool actions in XML blocks:\n" +
-                    "To create a file:\n<writing>\n{\n  \"file_path\": \"filename.py\",\n  \"content\": \"your file content here\"\n}\n</writing>\n\n" +
-                    "To execute a terminal command:\n<bash>\n{\n  \"command\": \"your command here\"\n}\n</bash>]";
+                const fallbackDirective = "\n\n[CRITICAL DIRECTIVE: You are operating in tool execution mode. When asked to run a command, execute a script, or create/read/modify a file (e.g. 'run basic.py'), DO NOT output step-by-step text instructions telling the user how to run it. YOU MUST IMMEDIATELY EXECUTE THE TOOL ACTION using XML tags:\n" +
+                    "To execute a terminal command (e.g. running python basic.py):\n<bash>\n{\n  \"command\": \"python3 basic.py\"\n}\n</bash>\n\n" +
+                    "To create or write a file:\n<writing>\n{\n  \"file_path\": \"filename.py\",\n  \"content\": \"code content\"\n}\n</writing>]";
                 const systemMsg = fallbackBody.messages.find(m => m.role === "system");
                 if (systemMsg) {
                     systemMsg.content += fallbackDirective;
