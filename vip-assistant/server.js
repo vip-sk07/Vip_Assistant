@@ -2432,6 +2432,38 @@ async function runAgentLoop(ws, agent, userText, settings) {
         // Not a JSON block, skip
       }
     }
+
+    // Parse raw untagged JSON tool calls (e.g. {"name": "Bash", ...}) in free text
+    if (!fallbackTriggered) {
+      const rawJsonRegex = /(\{[\s\S]*?"name"\s*:\s*"(?:Bash|Write|FileWrite|FileEdit|Read|FileRead)"[\s\S]*?\})/gi;
+      while ((match = rawJsonRegex.exec(generatedText)) !== null) {
+        try {
+          const data = tryParseToolPayload(match[1]);
+          if (data) {
+            if (data.name === 'Write' || data.name === 'FileWrite' || data.file_path) {
+              const filePath = data.arguments ? data.arguments.file_path : data.file_path;
+              const content = data.arguments ? data.arguments.content : data.content;
+              if (filePath && content !== undefined) {
+                const abs = resolveSafePath(filePath);
+                await fs.mkdir(path.dirname(abs), { recursive: true });
+                await fs.writeFile(abs, content);
+                newContext += `[System: Successfully wrote file ${filePath}]\n`;
+                fallbackTriggered = true;
+                ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Wrote file ${filePath}` }));
+              }
+            } else if (data.name === 'Bash' || data.command) {
+              const cmd = data.arguments ? data.arguments.command : data.command;
+              if (cmd) {
+                const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
+                newContext += `[System: Command executed: ${cmd}]\nStdout: ${stdout}\nStderr: ${stderr}\n`;
+                fallbackTriggered = true;
+                ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
+              }
+            }
+          }
+        } catch (err) {}
+      }
+    }
     
     if (fallbackTriggered) {
       return runAgentLoop(ws, agent, `[Fallback Tool Results]\n${newContext}`, settings);
