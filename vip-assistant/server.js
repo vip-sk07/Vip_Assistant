@@ -801,35 +801,8 @@ const customBashTool = {
     let resolveNext = null;
     let finished = false;
 
-    // Detect if network is needed for package installers or git remotes
-    const requiresNetwork = /\b(npm|yarn|pnpm|pip|pip3|cargo|go\s+get|git\s+(clone|pull|push|fetch)|curl|wget)\b/.test(input.command);
-    
-    // Construct Bubblewrap sandbox arguments
-    const bwrapArgs = [
-      '--ro-bind', '/', '/',
-      '--bind', WORKSPACE_DIR, WORKSPACE_DIR,
-      '--dev', '/dev',
-      '--bind', '/tmp', '/tmp',
-      '--dir', '/run',
-      '--proc', '/proc',
-      '--ro-bind', '/sys', '/sys',
-      '--chdir', ctx.cwd || WORKSPACE_DIR
-    ];
-    
-    if (!requiresNetwork) {
-      bwrapArgs.push('--unshare-net');
-    }
-    
-    bwrapArgs.push('/bin/bash', '-c', input.command);
-
-    const prlimitArgs = [
-      '--as=2147483648',       // 2GB virtual memory limit
-      '--fsize=524288000',      // 500MB max file size limit
-      'bwrap',
-      ...bwrapArgs
-    ];
-
-    const child = spawn('prlimit', prlimitArgs, {
+    const child = spawn('/bin/bash', ['-c', input.command], {
+      cwd: ctx.cwd || WORKSPACE_DIR,
       env: { ...process.env },
       signal: ctx.abortSignal
     });
@@ -1265,14 +1238,14 @@ wss.on('connection', (ws) => {
     for (const entry of entries) {
       if (entry.startsWith('.') || entry === 'node_modules') continue;
       try {
-        const stats = await fs.stat(path.join(WORKSPACE_DIR, entry));
+        const stats = await fs.lstat(path.join(WORKSPACE_DIR, entry));
         if (stats.isDirectory()) {
           dirs.push(entry);
         } else {
           files.push(entry);
         }
       } catch (statErr) {
-        console.warn(`Skipping unstatable entry: ${entry} (${statErr.message})`);
+        // Silently skip unstatable entries
       }
     }
     const allFiles = await getWorkspaceFilesRecursive(WORKSPACE_DIR);
@@ -2082,14 +2055,14 @@ Provide a concise, plain-English summary of the system status. Highlight any iss
         for (const entry of entries) {
           if (entry.startsWith('.') || entry === 'node_modules') continue;
           try {
-            const stats = await fs.stat(path.join(WORKSPACE_DIR, entry));
+            const stats = await fs.lstat(path.join(WORKSPACE_DIR, entry));
             if (stats.isDirectory()) {
               dirs.push(entry);
             } else {
               files.push(entry);
             }
           } catch (statErr) {
-            console.warn(`Skipping unstatable entry: ${entry} (${statErr.message})`);
+            // Ignore unstatable entries silently
           }
         }
         
@@ -2119,14 +2092,14 @@ Provide a concise, plain-English summary of the system status. Highlight any iss
         for (const entry of entries) {
           if (entry.startsWith('.') || entry === 'node_modules' || entry === 'claude-code-main') continue;
           try {
-            const stats = await fs.stat(path.join(WORKSPACE_DIR, entry));
+            const stats = await fs.lstat(path.join(WORKSPACE_DIR, entry));
             if (stats.isDirectory()) {
               dirs.push(entry);
             } else {
               files.push(entry);
             }
           } catch (statErr) {
-            console.warn(`Skipping unstatable entry: ${entry}`);
+            // Ignore unstatable entries silently
           }
         }
         
