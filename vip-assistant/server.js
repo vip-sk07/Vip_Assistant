@@ -2366,7 +2366,8 @@ async function runAgentLoop(ws, agent, userText, settings) {
         }
         if (cmd && cmd.length > 0) {
           const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
-          newContext += `[System: Command executed: ${cmd}]\nStdout: ${stdout}\nStderr: ${stderr}\n`;
+          const stdoutText = (stdout && stdout.trim()) ? stdout : "(Execution completed successfully with exit code 0. No stdout text was output by the script.)";
+          newContext += `[System: Command executed successfully: ${cmd}]\nStdout:\n${stdoutText}\nStderr:\n${stderr || '(None)'}\n`;
           fallbackTriggered = true;
           ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
         }
@@ -2397,7 +2398,8 @@ async function runAgentLoop(ws, agent, userText, settings) {
             const cmd = args.command;
             if (cmd) {
               const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
-              newContext += `[System: Command executed: ${cmd}]\nStdout: ${stdout}\nStderr: ${stderr}\n`;
+              const stdoutText = (stdout && stdout.trim()) ? stdout : "(Execution completed successfully with exit code 0. No stdout text was output by the script.)";
+              newContext += `[System: Command executed successfully: ${cmd}]\nStdout:\n${stdoutText}\nStderr:\n${stderr || '(None)'}\n`;
               fallbackTriggered = true;
               ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
             }
@@ -2430,7 +2432,8 @@ async function runAgentLoop(ws, agent, userText, settings) {
               const cmd = data.arguments ? data.arguments.command : data.command;
               if (cmd) {
                 const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
-                newContext += `[System: Command executed: ${cmd}]\nStdout: ${stdout}\nStderr: ${stderr}\n`;
+                const stdoutText = (stdout && stdout.trim()) ? stdout : "(Execution completed successfully with exit code 0. No stdout text was output by the script.)";
+                newContext += `[System: Command executed successfully: ${cmd}]\nStdout:\n${stdoutText}\nStderr:\n${stderr || '(None)'}\n`;
                 fallbackTriggered = true;
                 ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
               }
