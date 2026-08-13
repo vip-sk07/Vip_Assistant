@@ -14,6 +14,27 @@ import { google } from 'googleapis';
 
 const execAsync = promisify(exec);
 
+async function safeExecAsync(cmd) {
+  let stdout = "";
+  let stderr = "";
+  let error = null;
+  try {
+    const res = await execAsync(cmd, { cwd: WORKSPACE_DIR, timeout: 60000 });
+    stdout = res.stdout;
+    stderr = res.stderr;
+  } catch (execErr) {
+    error = execErr;
+    stdout = execErr.stdout || "";
+    stderr = execErr.stderr || execErr.message || "";
+  }
+  const stdoutText = (stdout && stdout.trim()) ? stdout : "(No stdout text was output by the command/script.)";
+  if (error) {
+    return `[System: Command executed and failed: ${cmd}]\nExit Code: ${error.code || 1}\nStdout:\n${stdoutText}\nStderr:\n${stderr}\n`;
+  } else {
+    return `[System: Command executed successfully: ${cmd}]\nStdout:\n${stdoutText}\nStderr:\n${stderr || '(None)'}\n`;
+  }
+}
+
 // Import compiled agent-core and tools
 import { createAgent } from './agent-core/dist/index.js';
 import { 
@@ -2319,8 +2340,8 @@ async function runAgentLoop(ws, agent, userText, settings) {
           } else if (data.name === 'Bash' || data.command) {
             const cmd = data.arguments ? data.arguments.command : data.command;
             if (cmd) {
-              const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
-              newContext += `[System: Command executed: ${cmd}]\nStdout: ${stdout}\nStderr: ${stderr}\n`;
+              const resultText = await safeExecAsync(cmd);
+              newContext += resultText;
               fallbackTriggered = true;
               ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
             }
@@ -2365,9 +2386,8 @@ async function runAgentLoop(ws, agent, userText, settings) {
           cmd = match[1].trim();
         }
         if (cmd && cmd.length > 0) {
-          const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
-          const stdoutText = (stdout && stdout.trim()) ? stdout : "(Execution completed successfully with exit code 0. No stdout text was output by the script.)";
-          newContext += `[System: Command executed successfully: ${cmd}]\nStdout:\n${stdoutText}\nStderr:\n${stderr || '(None)'}\n`;
+          const resultText = await safeExecAsync(cmd);
+          newContext += resultText;
           fallbackTriggered = true;
           ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
         }
@@ -2397,9 +2417,8 @@ async function runAgentLoop(ws, agent, userText, settings) {
             const args = data.arguments || {};
             const cmd = args.command;
             if (cmd) {
-              const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
-              const stdoutText = (stdout && stdout.trim()) ? stdout : "(Execution completed successfully with exit code 0. No stdout text was output by the script.)";
-              newContext += `[System: Command executed successfully: ${cmd}]\nStdout:\n${stdoutText}\nStderr:\n${stderr || '(None)'}\n`;
+              const resultText = await safeExecAsync(cmd);
+              newContext += resultText;
               fallbackTriggered = true;
               ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
             }
@@ -2431,9 +2450,8 @@ async function runAgentLoop(ws, agent, userText, settings) {
             } else if (data.name === 'Bash' || data.command) {
               const cmd = data.arguments ? data.arguments.command : data.command;
               if (cmd) {
-                const { stdout, stderr } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
-                const stdoutText = (stdout && stdout.trim()) ? stdout : "(Execution completed successfully with exit code 0. No stdout text was output by the script.)";
-                newContext += `[System: Command executed successfully: ${cmd}]\nStdout:\n${stdoutText}\nStderr:\n${stderr || '(None)'}\n`;
+                const resultText = await safeExecAsync(cmd);
+                newContext += resultText;
                 fallbackTriggered = true;
                 ws.send(JSON.stringify({ type: 'tool_log', text: `Fallback: Executed command ${cmd}` }));
               }

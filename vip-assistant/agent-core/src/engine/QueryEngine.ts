@@ -644,12 +644,41 @@ async function getLlmCompletion(
  * Real implementation would use tiktoken or the model's tokeniser.
  * Blueprint comment notes they use a simple character-count heuristic here too.
  */
+function estimateBlockChars(block: ContentBlock): number {
+  let chars = 0;
+  if (!block) return 0;
+  if (block.type === "text") {
+    chars += block.text?.length || 0;
+  } else if (block.type === "thinking") {
+    chars += (block as any).thinking?.length || 0;
+  } else if (block.type === "tool_use") {
+    chars += block.name?.length || 0;
+    if (block.input) {
+      try {
+        chars += JSON.stringify(block.input).length;
+      } catch {
+        chars += 50;
+      }
+    }
+  } else if (block.type === "tool_result") {
+    if (typeof block.content === "string") {
+      chars += block.content.length;
+    } else if (Array.isArray(block.content)) {
+      for (const sub of block.content) {
+        chars += estimateBlockChars(sub);
+      }
+    }
+  } else if (block.type === "image") {
+    chars += 2000;
+  }
+  return chars;
+}
+
 function estimateTokens(messages: Message[]): number {
   let chars = 0;
   for (const msg of messages) {
     for (const block of msg.content) {
-      if ("text" in block) chars += block.text.length;
-      if ("thinking" in block) chars += (block as any).thinking.length;
+      chars += estimateBlockChars(block);
     }
   }
   return Math.ceil(chars / 4); // ~4 chars per token

@@ -18,6 +18,7 @@
  */
 
 import type { Message, ThinkingConfig } from "../types.js";
+import { callModel } from "./modelClient.js";
 
 export type CompactionParams = {
   model: string;
@@ -102,29 +103,24 @@ ${transcript}
 
 SUMMARY:`;
 
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": process.env["ANTHROPIC_API_KEY"] ?? "",
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
+  try {
+    const events = callModel({
       model: params.model,
-      max_tokens: 2048,
-      messages: [{ role: "user", content: summaryPrompt }],
-    }),
-    signal: params.signal,
-  });
-
-  if (!resp.ok) {
-    // If summarisation fails, fall back to a truncation-only strategy
+      system: "You are a concise summarizer assistant.",
+      messages: [{ role: "user", content: [{ type: "text", text: summaryPrompt }] }],
+      tools: [],
+      thinkingConfig: { type: "disabled" },
+      signal: params.signal,
+    });
+    
+    let summary = "";
+    for await (const event of events) {
+      if (event.type === "content_block_delta") {
+        summary += event.delta;
+      }
+    }
+    return summary || "(summary unavailable)";
+  } catch (err) {
     return "(summary unavailable — context truncated)";
   }
-
-  const data = await resp.json() as { content: Array<{ type: string; text?: string }> };
-  return data.content
-    .filter(b => b.type === "text")
-    .map(b => b.text ?? "")
-    .join("");
 }
