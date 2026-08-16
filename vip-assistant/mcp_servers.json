@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "/home/karan/.local/bin/mcp-server-fetch",
+      "args": ["--ignore-robots-txt"]
+    }
+  }
+}
