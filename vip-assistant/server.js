@@ -2359,6 +2359,31 @@ Provide a concise, plain-English summary of the system status. Highlight any iss
       } catch (err) {
         ws.send(JSON.stringify({ type: 'error', message: 'Failed to open directory dialog: ' + err.message }));
       }
+    } else if (type === 'get_mcp_config') {
+      try {
+        let configPath = path.join(WORKSPACE_DIR, 'mcp_servers.json');
+        let fileExists = await fs.access(configPath).then(() => true).catch(() => false);
+        if (!fileExists) {
+          configPath = path.join(path.resolve('.'), 'mcp_servers.json');
+        }
+        const data = await fs.readFile(configPath, 'utf8');
+        ws.send(JSON.stringify({ type: 'mcp_config', config: JSON.parse(data) }));
+      } catch (err) {
+        ws.send(JSON.stringify({ type: 'mcp_config', config: { mcpServers: {} } }));
+      }
+    } else if (type === 'save_mcp_config') {
+      try {
+        let configPath = path.join(WORKSPACE_DIR, 'mcp_servers.json');
+        let inWorkspace = await fs.access(configPath).then(() => true).catch(() => false);
+        if (!inWorkspace) {
+          configPath = path.join(path.resolve('.'), 'mcp_servers.json');
+        }
+        await fs.writeFile(configPath, JSON.stringify(payload.config, null, 2), 'utf8');
+        ws.send(JSON.stringify({ type: 'toast', message: 'MCP Configuration saved successfully!', toastType: 'success' }));
+        ws.send(JSON.stringify({ type: 'mcp_config', config: payload.config }));
+      } catch (err) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Failed to save MCP config: ' + err.message }));
+      }
     }
   });
 });

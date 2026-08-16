@@ -26,7 +26,8 @@ const state = {
   ollamaModels: [],
   nvidiaModels: [],
   openTabs: [],
-  activeTabPath: null
+  activeTabPath: null,
+  mcpConfig: null
 };
 
 // Cache DOM Elements
@@ -69,6 +70,11 @@ const elements = {
   newWorkspacePathInput: document.getElementById('new-workspace-path-input'),
   browseFolderBtn: document.getElementById('browse-folder-btn'),
   browseSettingsFolderBtn: document.getElementById('browse-settings-folder-btn'),
+  mcpServersList: document.getElementById('mcp-servers-list'),
+  mcpServerName: document.getElementById('mcp-server-name'),
+  mcpServerCommand: document.getElementById('mcp-server-command'),
+  mcpServerArgs: document.getElementById('mcp-server-args'),
+  addMcpServerBtn: document.getElementById('add-mcp-server-btn'),
   
   // Controls
   clearChatBtn: document.getElementById('clear-chat-btn'),
@@ -379,6 +385,11 @@ function handleServerMessage(payload) {
       showToast(`Selected folder: ${payload.path}`);
       break;
       
+    case 'mcp_config':
+      state.mcpConfig = payload.config;
+      renderMcpServersList();
+      break;
+      
     case 'loop_finished':
       chatHistory = payload.history;
       localStorage.setItem('vip_chat_history', JSON.stringify(chatHistory));
@@ -502,8 +513,22 @@ function setupEventListeners() {
     });
   }
   
+  const requestMCPConfig = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'get_mcp_config' }));
+    }
+  };
+
+  if (typeof activitySettings !== 'undefined' && activitySettings) {
+    activitySettings.addEventListener('click', () => {
+      elements.settingsModal.classList.remove('hidden');
+      requestMCPConfig();
+    });
+  }
+
   elements.settingsTriggerBtn.addEventListener('click', () => {
     elements.settingsModal.classList.remove('hidden');
+    requestMCPConfig();
   });
   
   elements.closeSettingsBtn.addEventListener('click', () => {
@@ -1803,3 +1828,108 @@ chatInputContainer.addEventListener('drop', (e) => {
     handleFiles(e.dataTransfer.files);
   }
 });
+
+// MCP UI Managers
+function renderMcpServersList() {
+  if (!elements.mcpServersList) return;
+  elements.mcpServersList.innerHTML = '';
+  
+  const servers = state.mcpConfig?.mcpServers || {};
+  const entries = Object.entries(servers);
+  
+  if (entries.length === 0) {
+    elements.mcpServersList.innerHTML = `<div style="font-size: 0.85rem; color: var(--text-muted); font-style: italic;">No active MCP servers configured.</div>`;
+    return;
+  }
+  
+  for (const [name, config] of entries) {
+    const item = document.createElement('div');
+    item.style.cssText = "display: flex; flex-direction: column; background: rgba(255,255,255,0.02); border: 1px solid var(--border); padding: 0.8rem; border-radius: 8px; position: relative;";
+    
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = "display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;";
+    
+    const title = document.createElement('strong');
+    title.style.cssText = "font-size: 0.9rem; color: #fff; display: flex; align-items: center; gap: 0.4rem;";
+    title.innerHTML = `<span style="width: 8px; height: 8px; background: var(--success); border-radius: 50%; display: inline-block;"></span> ${name}`;
+    
+    const deleteBtn = document.createElement('button');
+    deleteBtn.innerHTML = '<i class="bx bx-trash"></i>';
+    deleteBtn.style.cssText = "background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1rem; transition: color 0.2s;";
+    deleteBtn.title = "Delete server";
+    deleteBtn.onmouseover = () => deleteBtn.style.color = 'var(--danger)';
+    deleteBtn.onmouseout = () => deleteBtn.style.color = 'var(--text-muted)';
+    deleteBtn.onclick = () => deleteMcpServer(name);
+    
+    header.appendChild(title);
+    header.appendChild(deleteBtn);
+    item.appendChild(header);
+    
+    // Command details
+    const details = document.createElement('div');
+    details.style.cssText = "font-size: 0.8rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.15rem; margin-top: 0.25rem;";
+    details.innerHTML = `
+      <div><span style="opacity: 0.6;">Command:</span> <code>${config.command}</code></div>
+      <div><span style="opacity: 0.6;">Arguments:</span> <code>${(config.args || []).join(' ')}</code></div>
+    `;
+    item.appendChild(details);
+    
+    elements.mcpServersList.appendChild(item);
+  }
+}
+
+async function deleteMcpServer(serverName) {
+  if (!state.mcpConfig || !state.mcpConfig.mcpServers) return;
+  if (confirm(`Are you sure you want to delete the MCP server "${serverName}"?`)) {
+    delete state.mcpConfig.mcpServers[serverName];
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'save_mcp_config',
+        payload: { config: state.mcpConfig }
+      }));
+    }
+  }
+}
+
+function addMcpServer() {
+  const name = elements.mcpServerName.value.trim();
+  const command = elements.mcpServerCommand.value.trim();
+  const argsRaw = elements.mcpServerArgs.value.trim();
+  
+  if (!name || !command) {
+    showToast('Server name and command are required.', 'error');
+    return;
+  }
+  
+  const args = argsRaw ? argsRaw.split(',').map(a => a.trim()).filter(Boolean) : [];
+  
+  if (!state.mcpConfig) {
+    state.mcpConfig = { mcpServers: {} };
+  }
+  if (!state.mcpConfig.mcpServers) {
+    state.mcpConfig.mcpServers = {};
+  }
+  
+  state.mcpConfig.mcpServers[name] = {
+    command,
+    args
+  };
+  
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'save_mcp_config',
+      payload: { config: state.mcpConfig }
+    }));
+  }
+  
+  // Clear inputs
+  elements.mcpServerName.value = '';
+  elements.mcpServerCommand.value = '';
+  elements.mcpServerArgs.value = '';
+}
+
+// Bind add event listener
+if (elements.addMcpServerBtn) {
+  elements.addMcpServerBtn.addEventListener('click', addMcpServer);
+}

@@ -404,6 +404,24 @@
           </div>
         </div>
 
+        <!-- Model Context Protocol (MCP) -->
+        <div class="settings-section">
+          <h3><i class="bx bx-cabinet"></i> Model Context Protocol (MCP)</h3>
+          <div id="mcp-servers-list" style="margin-bottom: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem;">
+            <!-- Active servers will be loaded here dynamically -->
+          </div>
+          
+          <div class="form-group" style="border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 1.5rem;">
+            <strong style="display: block; font-size: 0.85rem; margin-bottom: 0.5rem; color: #fff;">Add New MCP Server</strong>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+              <input type="text" id="mcp-server-name" class="form-input" placeholder="Server Name (e.g. fetch)" style="margin-bottom: 0.25rem;" />
+              <input type="text" id="mcp-server-command" class="form-input" placeholder="Executable Command (e.g. node, python)" style="margin-bottom: 0.25rem;" />
+              <input type="text" id="mcp-server-args" class="form-input" placeholder="Arguments (comma-separated, e.g. --ignore-robots-txt)" style="margin-bottom: 0.5rem;" />
+              <button id="add-mcp-server-btn" class="save-btn" style="background: var(--primary); font-size: 0.8rem; padding: 0.5rem 1rem; width: fit-content; align-self: flex-end; border: none; border-radius: 4px; color: #fff; cursor: pointer;">Add Server</button>
+            </div>
+          </div>
+        </div>
+
       </div>
       <div class="modal-footer">
         <button id="save-settings-btn" class="save-btn">Save Settings</button>
