@@ -1,0 +1,46 @@
+{
+  "name": "VIP Assistant Decision Table",
+  "hitPolicy": "FIRST",
+  "inputs": [
+    { "name": "queryIntent", "type": "string" },
+    { "name": "fileExtension", "type": "string" },
+    { "name": "isGitDirty", "type": "boolean" }
+  ],
+  "outputs": [
+    { "name": "selectedModel", "type": "string" },
+    { "name": "runBackup", "type": "boolean" },
+    { "name": "permissionMode", "type": "string" }
+  ],
+  "rules": [
+    {
+      "comment": "Rule 1: Prevent reading credential files entirely",
+      "inputs": ["*", "\".env\"", "*"],
+      "outputs": ["\"none\"", "false", "\"DENY\""]
+    },
+    {
+      "comment": "Rule 2: Force backup and use smart model if refactoring with unstaged git changes",
+      "inputs": ["\"refactor\"", "\".py\" | \".ts\" | \".js\" | \".tsx\" | \".jsx\" | \".json\"", "true"],
+      "outputs": ["\"gemini-2.5-pro\"", "true", "\"acceptEdits\""]
+    },
+    {
+      "comment": "Rule 3: Use smart model directly if refactoring with clean git changes",
+      "inputs": ["\"refactor\"", "\".py\" | \".ts\" | \".js\" | \".tsx\" | \".jsx\" | \".json\"", "false"],
+      "outputs": ["\"gemini-2.5-pro\"", "false", "\"acceptEdits\""]
+    },
+    {
+      "comment": "Rule 4: Shell scripts are high-risk; require confirmation prompt",
+      "inputs": ["\"run\"", "\".sh\" | \".bash\"", "*"],
+      "outputs": ["\"ollama/qwen2.5-coder\"", "false", "\"PROMPT\""]
+    },
+    {
+      "comment": "Rule 5: Explain queries route to cheap local models without credentials access",
+      "inputs": ["\"explain\"", "*", "*"],
+      "outputs": ["\"ollama/qwen2.5-coder\"", "false", "\"bypass\""]
+    },
+    {
+      "comment": "Rule 6: Default fallback mapping",
+      "inputs": ["*", "*", "*"],
+      "outputs": ["\"gemini-2.5-flash\"", "false", "\"default\""]
+    }
+  ]
+}

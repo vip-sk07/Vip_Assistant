@@ -35,6 +35,61 @@ async function safeExecAsync(cmd) {
   }
 }
 
+function evaluateDMNRule(rulesData, context) {
+  const { rules } = rulesData;
+  for (const rule of rules) {
+    let match = true;
+    for (let idx = 0; idx < rulesData.inputs.length; idx++) {
+      const inputName = rulesData.inputs[idx].name;
+      const inputVal = context[inputName];
+      const expression = rule.inputs[idx];
+      
+      if (!evaluateFEEL(expression, inputVal)) {
+        match = false;
+        break;
+      }
+    }
+    
+    if (match) {
+      const outputs = {};
+      rulesData.outputs.forEach((output, idx) => {
+        outputs[output.name] = parseRuleValue(rule.outputs[idx]);
+      });
+      return { matched: true, outputs, comment: rule.comment };
+    }
+  }
+  return { matched: false };
+}
+
+function evaluateFEEL(expression, value) {
+  if (expression === "*") return true; // Wildcard
+  
+  if (expression.includes("|")) {
+    const parts = expression.split("|").map(p => p.trim());
+    return parts.some(p => evaluateFEEL(p, value));
+  }
+  
+  if (expression.startsWith('"') && expression.endsWith('"')) {
+    const literal = expression.substring(1, expression.length - 1);
+    return value === literal;
+  }
+  
+  if (expression === "true") return value === true;
+  if (expression === "false") return value === false;
+  
+  return false;
+}
+
+function parseRuleValue(val) {
+  if (val.startsWith('"') && val.endsWith('"')) {
+    return val.substring(1, val.length - 1);
+  }
+  if (val === "true") return true;
+  if (val === "false") return false;
+  return val;
+}
+
+
 // Import compiled agent-core and tools
 import { createAgent } from './agent-core/dist/index.js';
 import { 
@@ -1333,24 +1388,112 @@ wss.on('connection', (ws) => {
       currentWs = ws;
       
       try {
-        const provider = settings.provider || 'gemini';
-        if (process.env.ACTIVE_PROVIDER !== provider) {
-          process.env.ACTIVE_PROVIDER = provider;
-          vectorDb.length = 0; // Clear RAG cache to prevent vector dimension mismatch crashes
-          console.log(`[RAG] Active provider changed to ${provider}. Cleared in-memory vector database.`);
+        let activeProvider = settings.provider || 'gemini';
+        let activeModel = settings.model;
+        let activeAutoApprove = settings.autoApprove;
+        
+        // 1. DMN context variables
+        let queryIntent = 'chat';
+        const lowerText = text.toLowerCase();
+        if (/\b(run|execute|bash|sh|cmd|test|start)\b/i.test(lowerText)) {
+          queryIntent = 'run';
+        } else if (/\b(refactor|rewrite|edit|modify|implement|write|create|patch|update)\b/i.test(lowerText)) {
+          queryIntent = 'refactor';
+        } else if (/\b(explain|why|how|what|question|describe|analyze)\b/i.test(lowerText)) {
+          queryIntent = 'explain';
         }
         
-        if (provider !== 'ollama') {
-          const apiKey = settings.apiKey || (provider === 'gemini' ? process.env.GEMINI_API_KEY : (provider === 'nvidia' ? process.env.NVIDIA_API_KEY : process.env.ANTHROPIC_API_KEY));
+        let fileExtension = 'none';
+        const fileMatch = text.match(/\b[a-zA-Z0-9_\-]+\.([a-zA-Z0-9]+)\b/);
+        if (fileMatch && fileMatch[1]) {
+          fileExtension = '.' + fileMatch[1].toLowerCase();
+        }
+        
+        let isGitDirty = false;
+        try {
+          const { stdout } = await execAsync('git status --porcelain', { cwd: WORKSPACE_DIR });
+          if (stdout && stdout.trim().length > 0) {
+            isGitDirty = true;
+          }
+        } catch (e) {}
+        
+        const dmnContext = { queryIntent, fileExtension, isGitDirty };
+        console.log(`[DMN Evaluator] Context gathered:`, JSON.stringify(dmnContext));
+        
+        // 2. Load and evaluate rules
+        try {
+          const dmnRulesContent = await fs.readFile(path.join(path.resolve('.'), 'dmn-rules.json'), 'utf8');
+          const dmnRules = JSON.parse(dmnRulesContent);
+          const evaluation = evaluateDMNRule(dmnRules, dmnContext);
+          
+          if (evaluation.matched) {
+            const outputs = evaluation.outputs;
+            console.log(`[DMN Evaluator] Rule matched: "${evaluation.comment}" -> Outputs:`, JSON.stringify(outputs));
+            ws.send(JSON.stringify({ type: 'tool_log', text: `DMN Match: "${evaluation.comment}"` }));
+            
+            if (outputs.permissionMode === 'DENY') {
+              ws.send(JSON.stringify({ type: 'tool_log', text: `🛡️ Security Alert: Action blocked by DMN Policy: "${evaluation.comment}"` }));
+              return ws.send(JSON.stringify({
+                type: 'error',
+                message: `🛡️ Action Denied by DMN Policy: Access to credentials or config files is strictly forbidden.`
+              }));
+            }
+            
+            if (outputs.runBackup && isGitDirty) {
+              ws.send(JSON.stringify({ type: 'tool_log', text: `DMN Guard: Unstaged changes detected. Running auto-backup commit...` }));
+              try {
+                await execAsync('git add . && git commit -m "Auto-backup before AI refactoring"', { cwd: WORKSPACE_DIR });
+                ws.send(JSON.stringify({ type: 'tool_log', text: `DMN Success: Workspace safely backed up to Git!` }));
+                // Update dirty flag state as it is now backed up
+                isGitDirty = false;
+              } catch (backupErr) {
+                ws.send(JSON.stringify({ type: 'tool_log', text: `DMN Warning: Git backup failed: ${backupErr.message}` }));
+              }
+            }
+            
+            if (outputs.selectedModel && outputs.selectedModel !== 'none') {
+              const selModel = outputs.selectedModel;
+              if (selModel.startsWith('ollama/')) {
+                activeProvider = 'ollama';
+                activeModel = selModel.replace(/^ollama\//, '');
+              } else if (selModel.startsWith('nvidia/')) {
+                activeProvider = 'nvidia';
+                activeModel = selModel.replace(/^nvidia\//, '');
+              } else {
+                activeProvider = 'gemini';
+                activeModel = selModel;
+              }
+              ws.send(JSON.stringify({ type: 'tool_log', text: `DMN Route: Routing request to model: ${selModel}` }));
+            }
+            
+            if (outputs.permissionMode === 'acceptEdits' || outputs.permissionMode === 'bypass') {
+              activeAutoApprove = true;
+            } else if (outputs.permissionMode === 'PROMPT') {
+              activeAutoApprove = false;
+            }
+          }
+        } catch (dmnErr) {
+          console.warn(`[DMN Evaluator] Skipping DMN evaluation:`, dmnErr.message);
+        }
+        
+        // --- ORIGINAL PIPELINE CONTROLLER (using DMN outputs) ---
+        if (process.env.ACTIVE_PROVIDER !== activeProvider) {
+          process.env.ACTIVE_PROVIDER = activeProvider;
+          vectorDb.length = 0; // Clear RAG cache to prevent vector dimension mismatch crashes
+          console.log(`[RAG] Active provider changed to ${activeProvider}. Cleared in-memory vector database.`);
+        }
+        
+        if (activeProvider !== 'ollama') {
+          const apiKey = settings.apiKey || (activeProvider === 'gemini' ? process.env.GEMINI_API_KEY : (activeProvider === 'nvidia' ? process.env.NVIDIA_API_KEY : process.env.ANTHROPIC_API_KEY));
           if (!apiKey) {
             return ws.send(JSON.stringify({
               type: 'error',
-              message: `${provider === 'gemini' ? 'Gemini' : (provider === 'nvidia' ? 'NVIDIA' : 'Anthropic')} API Key is missing. Please set it in Settings.`
+              message: `${activeProvider === 'gemini' ? 'Gemini' : (activeProvider === 'nvidia' ? 'NVIDIA' : 'Anthropic')} API Key is missing. Please set it in Settings.`
             }));
           }
-          if (provider === 'gemini') {
+          if (activeProvider === 'gemini') {
             process.env.GEMINI_API_KEY = apiKey.trim();
-          } else if (provider === 'nvidia') {
+          } else if (activeProvider === 'nvidia') {
             process.env.NVIDIA_API_KEY = apiKey.trim();
           } else {
             process.env.ANTHROPIC_API_KEY = apiKey.trim();
@@ -1360,10 +1503,11 @@ wss.on('connection', (ws) => {
           }
         }
         
-        const targetModel = provider === 'ollama' ? `ollama/${settings.model}` : (provider === 'nvidia' ? `nvidia/${settings.model}` : settings.model);
-        const targetPermissionMode = settings.autoApprove ? 'bypassPermissions' : 'default';
-        const targetProvider = provider;
-        const targetApiKey = provider !== 'ollama' ? (settings.apiKey || (provider === 'gemini' ? process.env.GEMINI_API_KEY : (provider === 'nvidia' ? process.env.NVIDIA_API_KEY : process.env.ANTHROPIC_API_KEY))) || '' : '';
+        const targetModel = activeProvider === 'ollama' ? `ollama/${activeModel}` : (activeProvider === 'nvidia' ? `nvidia/${activeModel}` : activeModel);
+        const targetPermissionMode = activeAutoApprove ? 'bypassPermissions' : 'default';
+        const targetProvider = activeProvider;
+        const targetApiKey = activeProvider !== 'ollama' ? (settings.apiKey || (activeProvider === 'gemini' ? process.env.GEMINI_API_KEY : (activeProvider === 'nvidia' ? process.env.NVIDIA_API_KEY : process.env.ANTHROPIC_API_KEY))) || '' : '';
+
         
         const systemRecoveryPrompt = `
 === SYSTEM SERVICE RECOVERY INSTRUCTION ===
