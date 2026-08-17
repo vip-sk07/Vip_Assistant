@@ -32,15 +32,13 @@ ws.on('open', () => {
   
   const payload = {
     type: 'user_message',
-    payload: {
-      text: prompt,
-      settings: {
-        provider: 'gemini',
-        model: 'gemini-2.5-flash',
-        autoApprove: true, // Default to autoApprove for CLI runs
-        persona: 'default',
-        customPrompt: ''
-      }
+    text: prompt,
+    settings: {
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      autoApprove: true, // Default to autoApprove for CLI runs
+      persona: 'default',
+      customPrompt: ''
     }
   };
   

@@ -507,19 +507,13 @@ function setupEventListeners() {
   
   // Settings Trigger
   const activitySettings = document.getElementById('activity-settings');
-  if (activitySettings) {
-    activitySettings.addEventListener('click', () => {
-      elements.settingsModal.classList.remove('hidden');
-    });
-  }
-  
   const requestMCPConfig = () => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'get_mcp_config' }));
     }
   };
 
-  if (typeof activitySettings !== 'undefined' && activitySettings) {
+  if (activitySettings) {
     activitySettings.addEventListener('click', () => {
       elements.settingsModal.classList.remove('hidden');
       requestMCPConfig();
