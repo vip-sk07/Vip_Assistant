@@ -40,7 +40,7 @@
     {
       "comment": "Rule 6: Default fallback mapping",
       "inputs": ["*", "*", "*"],
-      "outputs": ["\"gemini-2.5-flash\"", "false", "\"default\""]
+      "outputs": ["\"none\"", "false", "\"default\""]
     }
   ]
 }
