@@ -4,7 +4,7 @@
 
 // Application State
 let ws = null;
-let chatHistory = JSON.parse(localStorage.getItem('vip_chat_history')) || [];
+let chatHistory = JSON.parse(sessionStorage.getItem('vip_chat_history')) || [];
 let isGenerating = false;
 let currentToolApprovalPayload = null;
 let editorCMInstance = null;
@@ -392,7 +392,7 @@ function handleServerMessage(payload) {
       
     case 'loop_finished':
       chatHistory = payload.history;
-      localStorage.setItem('vip_chat_history', JSON.stringify(chatHistory));
+      sessionStorage.setItem('vip_chat_history', JSON.stringify(chatHistory));
       updateGeneratingState(false);
       break;
       
@@ -603,7 +603,7 @@ function setupEventListeners() {
   // Controls
   elements.clearChatBtn.addEventListener('click', () => {
     chatHistory = [];
-    localStorage.removeItem('vip_chat_history');
+    sessionStorage.removeItem('vip_chat_history');
     elements.messageList.innerHTML = '';
     elements.welcomeScreen.classList.remove('hidden');
     showToast('Chat history cleared');
